@@ -25,6 +25,10 @@
 #include <X11/extensions/Xdamage.h>
 #include <X11/extensions/Xrender.h>
 
+#define likely(x)       __builtin_expect(!!(x), 1)
+#define unlikely(x)     __builtin_expect(!!(x), 0)
+
+
 #if COMPOSITE_MAJOR > 0 || COMPOSITE_MINOR >= 2
 #define HAS_NAME_WINDOW_PIXMAP 1
 #endif
@@ -32,6 +36,7 @@
 #define CAN_DO_USABLE 0
 
 typedef enum {
+  WINTYPE_UNKNOWN, // MUST ALWAYS STAY first, due to init optimization in add_win
   WINTYPE_DESKTOP,
   WINTYPE_DOCK,
   WINTYPE_TOOLBAR,
@@ -854,9 +859,7 @@ win_extents(Display *dpy, win *w) {
   r.width = w->a.width + w->a.border_width * 2;
   r.height = w->a.height + w->a.border_width * 2;
 
-  // check NUM_WINTYPES to prevent segfault
-  if (w->window_type
-      && w->window_type < NUM_WINTYPES
+  if (likely(w->window_type)
       && win_type_shadow[w->window_type]) {
     XRectangle sr;
 
@@ -1344,12 +1347,10 @@ wintype_name(wintype type) {
 static wintype
 get_wintype_prop(Display * dpy, Window w) {
   Atom actual;
-  wintype ret;
   int format;
   unsigned long n, left, off;
   unsigned char *data;
 
-  ret = (wintype) - 1;
   off = 0;
 
   do {
@@ -1359,28 +1360,25 @@ get_wintype_prop(Display * dpy, Window w) {
       dpy, w, win_type_atom, off, 1L, False, XA_ATOM,
       &actual, &format, &n, &left, &data);
 
-    if (result != Success) break;
+    if (unlikely(result != Success)) break;
 
-    if (data != None) {
+    if (likely(data != None)) {
       int i;
-
-      for (i = 0; i < NUM_WINTYPES; ++i) {
+      for (i = 1; i < NUM_WINTYPES; ++i) {
         Atom a;
         memcpy(&a, data, sizeof(Atom));
         if (a == win_type[i]) {
           /* known type */
-          ret = i;
-          break;
+          XFree((void *) data);
+          return i;
         }
       }
-
       XFree((void *) data);
     }
-
     ++off;
-  } while (left >= 4 && ret == (wintype) - 1);
+  } while (left >= 4);
 
-  return ret;
+  return WINTYPE_UNKNOWN;
 }
 
 static wintype
@@ -1391,30 +1389,29 @@ determine_wintype(Display *dpy, Window w, Window top) {
   wintype type;
 
   type = get_wintype_prop(dpy, w);
-  if (type != (wintype) - 1) return type;
+  if (type != WINTYPE_UNKNOWN) return type;
 
   set_ignore(dpy, NextRequest(dpy));
   if (!XQueryTree(dpy, w, &root_return, &parent_return,
                   &children, &nchildren)) {
     /* XQueryTree failed. */
-    if (children) XFree((void *)children);
-    return (wintype) - 1;
+    goto free_out;
   }
 
   for (i = 0; i < nchildren; i++) {
     type = determine_wintype(dpy, children[i], top);
-    if (type != (wintype) - 1) return type;
-  }
-
-  if (children) {
-    XFree((void *)children);
+    if (type != WINTYPE_UNKNOWN) goto free_out;
   }
 
   if (w != top) {
-    return (wintype) - 1;
+    type = WINTYPE_UNKNOWN;
   } else {
-    return WINTYPE_NORMAL;
+    type = WINTYPE_NORMAL;
   }
+
+free_out:
+  if (children) XFree((void *)children);
+  return type;
 }
 
 static unsigned int
@@ -1428,7 +1425,7 @@ map_win(Display *dpy, Window id,
         unsigned long sequence, Bool fade) {
   win *w = find_win(dpy, id);
 
-  if (!w) return;
+  if (unlikely(!w)) return;
 
   w->a.map_state = IsViewable;
   w->window_type = determine_wintype(dpy, w->id, w->id);
@@ -1653,10 +1650,10 @@ set_opacity(Display *dpy, win *w, unsigned long opacity) {
 
 static void
 add_win(Display *dpy, Window id, Window prev) {
-  win *new = malloc(sizeof(win));
+  win *new = calloc(1, sizeof(win));
   win **p;
 
-  if (!new) return;
+  if (unlikely(!new)) return;
 
   if (prev) {
     for (p = &list; *p; p = &(*p)->next) {
@@ -1675,17 +1672,14 @@ add_win(Display *dpy, Window id, Window prev) {
     return;
   }
 
-  new->damaged = 0;
-#if CAN_DO_USABLE
-  new->usable = False;
-#endif
 #if HAS_NAME_WINDOW_PIXMAP
   new->pixmap = None;
 #endif
   new->picture = None;
 
   if (new->a.class == InputOnly) {
-    new->damage_sequence = 0;
+    // we used calloc, so no need to set zeroes
+    // new->damage_sequence = 0;
     new->damage = None;
   } else {
     new->damage_sequence = NextRequest(dpy);
@@ -1699,22 +1693,29 @@ add_win(Display *dpy, Window id, Window prev) {
   new->border_size = None;
   new->extents = None;
   new->shadow = None;
-  new->shadow_dx = 0;
-  new->shadow_dy = 0;
-  new->shadow_width = 0;
-  new->shadow_height = 0;
+
+  // we used calloc, so no need to set zeroes
+  // new->shadow_dx = 0;
+  // new->shadow_dy = 0;
+  // new->shadow_width = 0;
+  // new->shadow_height = 0;
+  // new->window_type = WINTYPE_UNKNOWN;
+  // new->prev_trans = 0;
+  // new->left_width = 0;
+  // new->right_width = 0;
+  // new->top_width = 0;
+  // new->bottom_width = 0;
+  // new->need_configure = False;
+  // new->destroyed = False;
+  // new->damaged = 0;
+// #if CAN_DO_USABLE
+  // new->usable = False;
+// #endif
+
+
   new->opacity = OPAQUE;
-  new->destroyed = False;
-  new->need_configure = False;
 
   new->border_clip = None;
-  new->prev_trans = 0;
-
-  new->left_width = 0;
-  new->right_width = 0;
-  new->top_width = 0;
-  new->bottom_width = 0;
-
   get_frame_extents(dpy, id,
     &new->left_width, &new->right_width,
     &new->top_width, &new->bottom_width);
@@ -2266,7 +2267,7 @@ main(int argc, char **argv) {
         }
         break;
       case 'c':
-        for (i = 0; i < NUM_WINTYPES; ++i) {
+        for (i = 1; i < NUM_WINTYPES; ++i) {
           win_type_shadow[i] = True;
         }
         break;
@@ -2278,7 +2279,7 @@ main(int argc, char **argv) {
         win_type_opacity[WINTYPE_POPUP_MENU] = atof(optarg);
         break;
       case 'f':
-        for (i = 0; i < NUM_WINTYPES; ++i) {
+        for (i = 1; i < NUM_WINTYPES; ++i) {
           win_type_fade[i] = True;
         }
         break;
