@@ -798,18 +798,21 @@ root_tile_f(Display *dpy) {
   Bool fill;
   XRenderPictureAttributes pa;
   int p;
+  int res;
 
   pixmap = None;
 
   for (p = 0; background_props[p]; p++) {
-    if (XGetWindowProperty(dpy, root,
+    prop = NULL;
+    res = XGetWindowProperty(dpy, root,
           XInternAtom(dpy, background_props[p], False),
           0, 4, False, AnyPropertyType, &actual_type,
-          &actual_format, &nitems, &bytes_after, &prop
-        ) == Success
-        && actual_type == XInternAtom(dpy, "PIXMAP", False)
-        && actual_format == 32 && nitems == 1) {
-      memcpy(&pixmap, prop, 4);
+          &actual_format, &nitems, &bytes_after, &prop);
+    if (likely(res == Success && prop != NULL )) {
+      if(actual_type == XInternAtom(dpy, "PIXMAP", False)
+            && actual_format == 32 && nitems == 1) {
+        memcpy(&pixmap, prop, 4);
+      }
       XFree(prop);
       fill = False;
       break;
