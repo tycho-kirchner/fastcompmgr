@@ -2240,9 +2240,6 @@ main(int argc, char **argv) {
     win_type_opacity[i] = 1.0;
   }
 
-  /* don't bother to draw a shadow for the desktop */
-  win_type_shadow[WINTYPE_DESKTOP] = False;
-
   while ((o = getopt(argc, argv, "D:I:O:d:r:o:m:l:t:i:e:scnfFCaS")) != -1) {
     switch (o) {
       case 'd':
@@ -2270,6 +2267,7 @@ main(int argc, char **argv) {
         for (i = 1; i < NUM_WINTYPES; ++i) {
           win_type_shadow[i] = True;
         }
+        win_type_shadow[WINTYPE_DESKTOP] = False;
         break;
       case 'C':
         no_dock_shadow = True;
