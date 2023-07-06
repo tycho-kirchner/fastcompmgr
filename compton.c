@@ -140,8 +140,11 @@ Bool synchronize;
 int composite_opcode;
 
 /* find these once and be done with it */
-Atom opacity_atom;
-Atom win_type_atom;
+Atom atom_opacity;
+Atom atom_win_type;
+Atom atom_pixmap;
+Atom atom_wm_state;
+Atom atom_net_frame_extents;
 Atom win_type[NUM_WINTYPES];
 double win_type_opacity[NUM_WINTYPES];
 Bool win_type_shadow[NUM_WINTYPES];
@@ -809,7 +812,7 @@ root_tile_f(Display *dpy) {
           0, 4, False, AnyPropertyType, &actual_type,
           &actual_format, &nitems, &bytes_after, &prop);
     if (likely(res == Success && prop != NULL )) {
-      if(actual_type == XInternAtom(dpy, "PIXMAP", False)
+      if(actual_type == atom_pixmap
             && actual_format == 32 && nitems == 1) {
         memcpy(&pixmap, prop, 4);
       }
@@ -941,8 +944,6 @@ border_size(Display *dpy, win *w) {
 
 static Window
 find_client_win(Display *dpy, Window win) {
-  Atom WM_STATE = XInternAtom(dpy, "WM_STATE", False);
-
   Window root, parent;
   Window *children;
   unsigned int nchildren;
@@ -954,7 +955,7 @@ find_client_win(Display *dpy, Window win) {
   Window client = 0;
 
   XGetWindowProperty(
-    dpy, win, WM_STATE, 0, 0, False,
+    dpy, win, atom_wm_state, 0, 0, False,
     AnyPropertyType, &type, &format, &nitems,
     &after, &data);
 
@@ -997,7 +998,7 @@ get_frame_extents(Display *dpy, Window w,
   if (!w) return;
 
   result = XGetWindowProperty(
-    dpy, w, XInternAtom(dpy, "_NET_FRAME_EXTENTS", False),
+    dpy, w, atom_net_frame_extents,
     0L, 4L, False, AnyPropertyType,
     &type, &format, &nitems, &after,
     (unsigned char **)&data);
@@ -1360,7 +1361,7 @@ get_wintype_prop(Display * dpy, Window w) {
     set_ignore(dpy, NextRequest(dpy));
 
     int result = XGetWindowProperty(
-      dpy, w, win_type_atom, off, 1L, False, XA_ATOM,
+      dpy, w, atom_win_type, off, 1L, False, XA_ATOM,
       &actual, &format, &n, &left, &data);
 
     if (unlikely(result != Success)) break;
@@ -1551,7 +1552,7 @@ get_opacity_prop(Display *dpy, win *w, unsigned int def) {
 
   unsigned char *data;
   int result = XGetWindowProperty(
-    dpy, w->id, opacity_atom, 0L, 1L, False,
+    dpy, w->id, atom_opacity, 0L, 1L, False,
     XA_CARDINAL, &actual, &format, &n, &left, &data);
 
   if (result == Success && data != NULL) {
@@ -2370,10 +2371,16 @@ main(int argc, char **argv) {
   register_cm(scr);
 
   /* get atoms */
-  opacity_atom = XInternAtom(dpy,
+  atom_opacity = XInternAtom(dpy,
     "_NET_WM_WINDOW_OPACITY", False);
-  win_type_atom = XInternAtom(dpy,
+  atom_win_type = XInternAtom(dpy,
     "_NET_WM_WINDOW_TYPE", False);
+  atom_pixmap = XInternAtom(dpy,
+    "PIXMAP", False);
+  atom_wm_state = XInternAtom(dpy,
+    "WM_STATE", False);
+  atom_net_frame_extents = XInternAtom(dpy,
+    "_NET_FRAME_EXTENTS", False),
   win_type[WINTYPE_DESKTOP] = XInternAtom(dpy,
     "_NET_WM_WINDOW_TYPE_DESKTOP", False);
   win_type[WINTYPE_DOCK] = XInternAtom(dpy,
@@ -2560,7 +2567,7 @@ main(int argc, char **argv) {
             }
           }
           /* check if Trans property was changed */
-          if (ev.xproperty.atom == opacity_atom) {
+          if (ev.xproperty.atom == atom_opacity) {
             /* reset mode and redraw window */
             win *w = find_win(dpy, ev.xproperty.window);
             if (w) {
