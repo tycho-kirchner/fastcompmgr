@@ -160,8 +160,12 @@ conv *gaussian_map;
 #define WINDOW_TRANS 1
 #define WINDOW_ARGB 2
 
+#ifndef DEBUG_REPAINT
 #define DEBUG_REPAINT 0
+#endif
+#ifndef DEBUG_EVENTS
 #define DEBUG_EVENTS 0
+#endif
 #define MONITOR_REPAINT 0
 
 static void
@@ -1671,7 +1675,7 @@ add_win(Display *dpy, Window id, Window prev) {
   new->id = id;
   set_ignore(dpy, NextRequest(dpy));
 
-  if (!XGetWindowAttributes(dpy, id, &new->a)) {
+  if (unlikely(!XGetWindowAttributes(dpy, id, &new->a))) {
     free(new);
     return;
   }
@@ -1715,7 +1719,6 @@ add_win(Display *dpy, Window id, Window prev) {
 // #if CAN_DO_USABLE
   // new->usable = False;
 // #endif
-
 
   new->opacity = OPAQUE;
 
@@ -2059,7 +2062,7 @@ error(Display *dpy, XErrorEvent *ev) {
       break;
   }
 
-  printf("error %d (%s) request %d minor %d serial %lu\n",
+  fprintf(stderr, "error %d (%s) request %d minor %d serial %lu\n",
       ev->error_code, name, ev->request_code,
       ev->minor_code, ev->serial);
 
@@ -2077,7 +2080,7 @@ expose_root(Display *dpy, Window root, XRectangle *rects, int nrects) {
 #if DEBUG_EVENTS
 static int
 ev_serial(XEvent *ev) {
-  if (ev->type & 0x7f != KeymapNotify) {
+  if ((ev->type & 0x7f) != KeymapNotify) {
     return ev->xany.serial;
   }
   return NextRequest(ev->xany.display);
@@ -2086,7 +2089,18 @@ ev_serial(XEvent *ev) {
 static char *
 ev_name(XEvent *ev) {
   static char buf[128];
-  switch (ev->type & 0x7f) {
+  // what?? switch (ev->type & 0x7f) {
+  switch (ev->type) {
+    case FocusIn:
+      return "FocusIn";
+    case FocusOut:
+      return "FocusOut";
+    case CreateNotify:
+      return "CreateNotify";
+    case ConfigureNotify:
+      return "ConfigureNotify";
+    case DestroyNotify:
+      return "DestroyNotify";
     case Expose:
       return "Expose";
     case MapNotify:
@@ -2097,6 +2111,8 @@ ev_name(XEvent *ev) {
       return "Reparent";
     case CirculateNotify:
       return "Circulate";
+    case PropertyNotify:
+      return "PropertyNotify";
     default:
       if (ev->type == damage_event + XDamageNotify) {
         return "Damage";
@@ -2469,7 +2485,7 @@ main(int argc, char **argv) {
       }
 
 #if DEBUG_EVENTS
-      printf("event %10.10s serial 0x%08x window 0x%08x\n",
+      fprintf(stderr, "event %s serial 0x%08x window 0x%08lx\n",
           ev_name(&ev), ev_serial(&ev), ev_window(&ev));
 #endif
 
