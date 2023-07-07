@@ -173,6 +173,8 @@ determine_mode(Display *dpy, win *w);
 
 static double
 get_opacity_percent(Display *dpy, win *w);
+static void
+do_configure_win(Display *dpy, win* w);
 
 static XserverRegion
 win_extents(Display *dpy, win *w);
@@ -1067,6 +1069,11 @@ paint_all(Display *dpy, XserverRegion region) {
 #endif
 
   for (w = list; w; w = w->next) {
+    // Don't do this here, otherwise we get artifacts after move.
+    // if (w->need_configure){
+    //   do_configure_win(dpy, w);
+    // }
+
 
 #if CAN_DO_USABLE
     if (!w->usable) continue;
@@ -1400,9 +1407,8 @@ determine_wintype(Display *dpy, Window w, Window top) {
   if (type != WINTYPE_UNKNOWN) return type;
 
   set_ignore(dpy, NextRequest(dpy));
-  if (!XQueryTree(dpy, w, &root_return, &parent_return,
-                  &children, &nchildren)) {
-    /* XQueryTree failed. */
+  if (unlikely(!XQueryTree(dpy, w, &root_return, &parent_return,
+                  &children, &nchildren))) {
     goto free_out;
   }
 
@@ -1426,7 +1432,7 @@ static unsigned int
 get_opacity_prop(Display *dpy, win *w, unsigned int def);
 
 static void
-configure_win(Display *dpy, XConfigureEvent *ce);
+handle_ConfigureNotify(Display *dpy, XConfigureEvent *ce);
 
 static void
 map_win(Display *dpy, Window id,
@@ -1467,9 +1473,9 @@ map_win(Display *dpy, Window id,
   /* if any configure events happened while
      the window was unmapped, then configure
      the window to its correct place */
-  if (w->need_configure) {
-    configure_win(dpy, &w->queue_configure);
-  }
+  // if (w->need_configure) {
+  //   handle_ConfigureNotify(dpy, &w->queue_configure);
+  // }
 }
 
 static void
@@ -1496,6 +1502,10 @@ finish_unmap_win(Display *dpy, win *w) {
     XRenderFreePicture(dpy, w->picture);
     w->picture = None;
   }
+
+  /* don't care about properties anymore */
+  set_ignore(dpy, NextRequest(dpy));
+  XSelectInput(dpy, w->id, 0);
 
   if (w->border_size) {
     set_ignore(dpy, NextRequest(dpy));
@@ -1530,11 +1540,6 @@ unmap_win(Display *dpy, Window id, Bool fade) {
   if (!w) return;
 
   w->a.map_state = IsUnmapped;
-
-  /* don't care about properties anymore */
-  set_ignore(dpy, NextRequest(dpy));
-  XSelectInput(dpy, w->id, 0);
-
 #if HAS_NAME_WINDOW_PIXMAP
   if (w->pixmap && fade && win_type_fade[w->window_type]) {
     set_fade(dpy, w, w->opacity * 1.0 / OPAQUE, 0.0,
@@ -1771,11 +1776,65 @@ restack_win(Display *dpy, win *w, Window new_above) {
 }
 
 static void
-configure_win(Display *dpy, XConfigureEvent *ce) {
-  win *w = find_win(dpy, ce->window);
+do_configure_win(Display *dpy, win* w){
   XserverRegion damage = None;
+  XConfigureEvent* ce = &w->queue_configure;
 
-  if (!w) {
+  w->need_configure = False;
+
+#if CAN_DO_USABLE
+  if (w->usable)
+#endif
+  {
+    damage = XFixesCreateRegion(dpy, 0, 0);
+    if (w->extents != None)
+      XFixesCopyRegion(dpy, damage, w->extents);
+  }
+
+
+  w->a.x = ce->x;
+  w->a.y = ce->y;
+  if (w->a.width != ce->width || w->a.height != ce->height) {
+
+#if HAS_NAME_WINDOW_PIXMAP
+    if (w->pixmap) {
+      XFreePixmap(dpy, w->pixmap);
+      w->pixmap = None;
+      if (w->picture) {
+        XRenderFreePicture(dpy, w->picture);
+        w->picture = None;
+      }
+    }
+#endif
+
+    if (w->shadow) {
+      XRenderFreePicture(dpy, w->shadow);
+      w->shadow = None;
+    }
+  }
+
+  w->a.width = ce->width;
+  w->a.height = ce->height;
+  w->a.border_width = ce->border_width;
+
+  if (w->a.map_state != IsUnmapped && damage) {
+    XserverRegion extents = win_extents(dpy, w);
+    XFixesUnionRegion(dpy, damage, damage, extents);
+    XFixesDestroyRegion(dpy, extents);
+    add_damage(dpy, damage);
+  }
+
+  clip_changed = True;
+  w->a.override_redirect = ce->override_redirect;
+}
+
+Bool g_configure_needed = False;
+
+static void
+handle_ConfigureNotify(Display *dpy, XConfigureEvent *ce) {
+  win *w = find_win(dpy, ce->window);
+
+  if (unlikely(!w)) {
     if (ce->window == root) {
       if (root_buffer) {
         XRenderFreePicture(dpy, root_buffer);
@@ -1786,59 +1845,12 @@ configure_win(Display *dpy, XConfigureEvent *ce) {
     }
     return;
   }
+  // save the configure event for later
+  g_configure_needed = True;
+  w->need_configure = True;
+  w->queue_configure = *ce;
 
-  if (w->a.map_state == IsUnmapped) {
-    /* save the configure event for when the window maps */
-    w->need_configure = True;
-    w->queue_configure = *ce;
-  } else {
-    w->need_configure = False;
-
-#if CAN_DO_USABLE
-    if (w->usable)
-#endif
-    {
-      damage = XFixesCreateRegion(dpy, 0, 0);
-      if (w->extents != None)
-        XFixesCopyRegion(dpy, damage, w->extents);
-    }
-
-    w->a.x = ce->x;
-    w->a.y = ce->y;
-
-    if (w->a.width != ce->width || w->a.height != ce->height) {
-#if HAS_NAME_WINDOW_PIXMAP
-      if (w->pixmap) {
-        XFreePixmap(dpy, w->pixmap);
-        w->pixmap = None;
-        if (w->picture) {
-          XRenderFreePicture(dpy, w->picture);
-          w->picture = None;
-        }
-      }
-#endif
-
-      if (w->shadow) {
-        XRenderFreePicture(dpy, w->shadow);
-        w->shadow = None;
-      }
-    }
-
-    w->a.width = ce->width;
-    w->a.height = ce->height;
-    w->a.border_width = ce->border_width;
-
-    if (w->a.map_state != IsUnmapped && damage) {
-      XserverRegion extents = win_extents(dpy, w);
-      XFixesUnionRegion(dpy, damage, damage, extents);
-      XFixesDestroyRegion(dpy, extents);
-      add_damage(dpy, damage);
-    }
-
-    clip_changed = True;
-  }
-
-  w->a.override_redirect = ce->override_redirect;
+  // w->a.override_redirect = ce->override_redirect;
   restack_win(dpy, w, ce->above);
 }
 
@@ -1951,7 +1963,7 @@ static void
 damage_win(Display *dpy, XDamageNotifyEvent *de) {
   win *w = find_win(dpy, de->drawable);
 
-  if (!w) return;
+  if (unlikely(!w)) return;
 
 #if CAN_DO_USABLE
   if (!w->usable) {
@@ -2236,6 +2248,63 @@ register_cm(int scr) {
   XSetSelectionOwner(dpy, a, w, 0);
 }
 
+static void run_configures(Display *dpy){
+  win *w;
+  for (w = list; w; w = w->next) {
+    if (w->need_configure && !w->destroyed){
+      do_configure_win(dpy, w);
+    }
+  }
+}
+
+static void
+do_paint(Display *dpy){
+   paint_all(dpy, all_damage);
+   XSync(dpy, False);
+   all_damage = None;
+   clip_changed = False;
+}
+
+static Bool configure_timer_started = False;
+static int configure_time = 0;
+
+/// When a window is moved, or resized, a lot of ConfigureNotify events
+/// occur. However, painting and Xsyncing of complex windows, e.g.
+/// web-browser contents, may introduce a considerable lag. Therefore, for each
+/// window, we cache the "latest" configure event and paint the events after
+/// some timeout. On the other hand, we want to handle other events, especially
+/// damage events, as fast as possible, so we do not timeout in this case.
+static void
+check_paint(Display *dpy){
+  if(unlikely(g_configure_needed)){
+    const int EVERY_MILISEC = 2;
+    if(!configure_timer_started){
+      // Not strictly necessary to paint now, but until we run, the
+      // configured window has already been moving/resizing for a (short)
+      // while, so give early feedback to the user.
+      run_configures(dpy);
+      do_paint(dpy);
+      configure_timer_started = True;
+      configure_time = get_time_in_milliseconds() + EVERY_MILISEC;
+    } else {
+      int delta;
+      delta = get_time_in_milliseconds() - configure_time;
+      if (delta < EVERY_MILISEC){
+        return;
+      }
+      g_configure_needed = False;
+      configure_timer_started = False;
+      run_configures(dpy);
+      do_paint(dpy);
+    }
+  } else {
+    if(likely(all_damage)) {
+      do_paint(dpy);
+    }
+  }
+}
+
+
 int
 main(int argc, char **argv) {
   XEvent ev;
@@ -2472,15 +2541,18 @@ main(int argc, char **argv) {
     /*    dump_wins(); */
     do {
       if (!QLength(dpy)) {
-        if (poll(&ufd, 1, fade_timeout()) == 0) {
-          run_fades(dpy);
+        // TODO: check and re-implement fade time logic.
+        int timeout = (configure_timer_started) ? 2 : fade_timeout();
+        if (unlikely(poll(&ufd, 1, timeout) == 0)) {
+          check_paint(dpy);
+           //   run_fades(dpy);
           break;
         }
       }
 
       XNextEvent(dpy, &ev);
 
-      if ((ev.type & 0x7f) != KeymapNotify) {
+      if (likely((ev.type & 0x7f) != KeymapNotify)) {
         discard_ignore(dpy, ev.xany.serial);
       }
 
@@ -2525,7 +2597,7 @@ main(int argc, char **argv) {
           add_win(dpy, ev.xcreatewindow.window, 0);
           break;
         case ConfigureNotify:
-          configure_win(dpy, &ev.xconfigure);
+          handle_ConfigureNotify(dpy, &ev.xconfigure);
           break;
         case DestroyNotify:
           destroy_win(dpy, ev.xdestroywindow.window, True);
@@ -2594,20 +2666,13 @@ main(int argc, char **argv) {
           }
           break;
         default:
-          if (ev.type == damage_event + XDamageNotify) {
+          if (likely(ev.type == damage_event + XDamageNotify)) {
             damage_win(dpy, (XDamageNotifyEvent *)&ev);
           }
           break;
       }
     } while (QLength(dpy));
 
-    if (all_damage) {
-      static int paint;
-      paint_all(dpy, all_damage);
-      paint++;
-      XSync(dpy, False);
-      all_damage = None;
-      clip_changed = False;
-    }
+    check_paint(dpy);
   }
 }
