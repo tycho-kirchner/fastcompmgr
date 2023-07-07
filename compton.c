@@ -957,15 +957,18 @@ find_client_win(Display *dpy, Window win) {
   Atom type = None;
   int format;
   unsigned long nitems, after;
-  unsigned char *data;
+  unsigned char *data = NULL;
   Window client = 0;
+  int res;
 
-  XGetWindowProperty(
+  res = XGetWindowProperty(
     dpy, win, atom_wm_state, 0, 0, False,
     AnyPropertyType, &type, &format, &nitems,
     &after, &data);
-
-  if (type) return win;
+  if (likely(res == Success && data != NULL )) {
+      XFree(data);
+      if (likely(type)) return win;
+  }
 
   if (!XQueryTree(dpy, win, &root,
       &parent, &children, &nchildren)) {
