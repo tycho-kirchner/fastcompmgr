@@ -25,6 +25,8 @@
 #include <X11/extensions/Xdamage.h>
 #include <X11/extensions/Xrender.h>
 
+#include "comp_rect.h"
+
 #define likely(x)       __builtin_expect(!!(x), 1)
 #define unlikely(x)     __builtin_expect(!!(x), 0)
 
@@ -88,6 +90,7 @@ typedef struct _win {
   wintype window_type;
   unsigned long damage_sequence; /* sequence when damage was created */
   Bool destroyed;
+  Bool paint_needed;
   unsigned int left_width;
   unsigned int right_width;
   unsigned int top_width;
@@ -138,6 +141,7 @@ int composite_event, composite_error;
 int render_event, render_error;
 Bool synchronize;
 int composite_opcode;
+static Bool g_paint_ignore_region_is_dirty = True;
 
 /* find these once and be done with it */
 Atom atom_opacity;
@@ -175,6 +179,8 @@ static double
 get_opacity_percent(Display *dpy, win *w);
 static void
 do_configure_win(Display *dpy, win* w);
+static void
+set_paint_ignore_region_dirty(void);
 
 static XserverRegion
 win_extents(Display *dpy, win *w);
@@ -1028,10 +1034,29 @@ get_frame_extents(Display *dpy, Window w,
   }
 }
 
+static Bool
+win_paint_needed(win* w, CompRect* ignore_reg){
+  // if invisible, ignore it
+    if (unlikely(w->a.x + w->a.width < 1 || w->a.y + w->a.height < 1
+        || w->a.x >= root_width || w->a.y >= root_height)) {
+      return False;
+    }
+    // Unmapped, destroyed or translucent windows must not contribute to the ignore region.
+    if (w->a.map_state != IsViewable || w->destroyed || w->opacity != OPAQUE){
+      return True;
+    }
+    CompRect w_rect = {.x1 = w->a.x, .y1 = w->a.y,
+                   .x2 = w->a.x + w->a.width, .y2 = w->a.y + w->a.height,
+                   .w = w->a.width , .h = w->a.height };
+    return rect_paint_needed(ignore_reg, &w_rect);
+}
+
 static void
 paint_all(Display *dpy, XserverRegion region) {
   win *w;
   win *t = 0;
+  Bool ignore_region_is_dirty = g_paint_ignore_region_is_dirty;
+  g_paint_ignore_region_is_dirty = False;
 
   if (!region) {
     XRectangle r;
@@ -1071,25 +1096,26 @@ paint_all(Display *dpy, XserverRegion region) {
   printf("paint:");
 #endif
 
+  CompRect ignore_reg = {0};
   for (w = list; w; w = w->next) {
     // Don't do this here, otherwise we get artifacts after move.
     // if (w->need_configure){
     //   do_configure_win(dpy, w);
     // }
 
+    if(unlikely(ignore_region_is_dirty)){
+      // maybe_todo: pass only clipped rects, actually visible on screen.
+      // Now we may choose the ignore region from a big window which
+      // resides largely outside the screen.
+      w->paint_needed = win_paint_needed(w, &ignore_reg);
+    }
 
 #if CAN_DO_USABLE
     if (!w->usable) continue;
 #endif
 
     /* never painted, ignore it */
-    if (!w->damaged) continue;
-
-    /* if invisible, ignore it */
-    if (w->a.x + w->a.width < 1 || w->a.y + w->a.height < 1
-        || w->a.x >= root_width || w->a.y >= root_height) {
-      continue;
-    }
+    if (likely(!w->damaged || !w->paint_needed)) continue;
 
     if (!w->picture) {
       XRenderPictureAttributes pa;
@@ -1473,6 +1499,8 @@ map_win(Display *dpy, Window id,
       fade_in_step, 0, True, True);
   }
 
+  set_paint_ignore_region_dirty();
+
   /* if any configure events happened while
      the window was unmapped, then configure
      the window to its correct place */
@@ -1506,10 +1534,6 @@ finish_unmap_win(Display *dpy, win *w) {
     w->picture = None;
   }
 
-  /* don't care about properties anymore */
-  set_ignore(dpy, NextRequest(dpy));
-  XSelectInput(dpy, w->id, 0);
-
   if (w->border_size) {
     set_ignore(dpy, NextRequest(dpy));
       XFixesDestroyRegion(dpy, w->border_size);
@@ -1542,7 +1566,14 @@ unmap_win(Display *dpy, Window id, Bool fade) {
 
   if (!w) return;
 
+    /* don't care about properties anymore */
+  set_ignore(dpy, NextRequest(dpy));
+  XSelectInput(dpy, w->id, 0);
+
   w->a.map_state = IsUnmapped;
+  set_paint_ignore_region_dirty();
+
+
 #if HAS_NAME_WINDOW_PIXMAP
   if (w->pixmap && fade && win_type_fade[w->window_type]) {
     set_fade(dpy, w, w->opacity * 1.0 / OPAQUE, 0.0,
@@ -1662,6 +1693,7 @@ set_opacity(Display *dpy, win *w, unsigned long opacity) {
       w->extents = win_extents(dpy, w);
     }
   }
+  set_paint_ignore_region_dirty();
 }
 
 static void
@@ -1747,6 +1779,11 @@ add_win(Display *dpy, Window id, Window prev) {
   }
 }
 
+static void
+set_paint_ignore_region_dirty(void){
+  g_paint_ignore_region_is_dirty = True;
+}
+
 void
 restack_win(Display *dpy, win *w, Window new_above) {
   Window old_above;
@@ -1829,6 +1866,7 @@ do_configure_win(Display *dpy, win* w){
 
   clip_changed = True;
   w->a.override_redirect = ce->override_redirect;
+  set_paint_ignore_region_dirty();
 }
 
 Bool g_configure_needed = False;
@@ -1929,6 +1967,8 @@ destroy_win(Display *dpy, Window id, Bool fade) {
   win *w = find_win(dpy, id);
 
   if (w) w->destroyed = True;
+
+  set_paint_ignore_region_dirty();
 
 #if HAS_NAME_WINDOW_PIXMAP
   if (w && w->pixmap && fade && win_type_fade[w->window_type]) {

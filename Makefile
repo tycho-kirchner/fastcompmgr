@@ -5,7 +5,7 @@ CFLAGS = -Wall
 PREFIX = /usr/local
 MANDIR = ${PREFIX}/share/man/man1
 
-OBJS=compton.o
+OBJS=compton.o comp_rect.o
 
 .c.o:
 	$(CC) $(CFLAGS) $(INCS) -c $*.c
