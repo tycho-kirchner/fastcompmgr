@@ -1179,11 +1179,11 @@ paint_all(Display *dpy, XserverRegion region) {
       hei = w->a.height;
 #endif
 
+      set_ignore(dpy, NextRequest(dpy));
       XFixesSetPictureClipRegion(dpy, root_buffer, 0, 0, region);
-      set_ignore(dpy, NextRequest(dpy));
 
-      XFixesSubtractRegion(dpy, region, region, w->border_size);
       set_ignore(dpy, NextRequest(dpy));
+      XFixesSubtractRegion(dpy, region, region, w->border_size);
 
       XRenderComposite(
         dpy, PictOpSrc, w->picture,
