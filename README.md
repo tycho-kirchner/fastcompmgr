@@ -1,33 +1,26 @@
-# Compton
+# fastcompmgr
 
-__Compton__ is a compositor for X, and a fork of __xcompmgr-dana__.
+__fastcompmgr__ is a _fast_ compositor for X, a fork of an early version
+of __Compton__ which is a fork of __xcompmgr-dana__ which is a fork
+of __xcompmgr__.
 
-I was frustrated by the low amount of standalone lightweight compositors.
-Compton was forked from Dana Jansens' fork of xcompmgr and refactored.  I fixed
-whatever bug I found, and added features I wanted. Things seem stable, but don't
-quote me on it. I will most likely be actively working on this until I get the
-features I want. This is also a learning experience for me. That is, I'm
-partially doing this out of a desire to learn Xlib.
+I used to use good old xcompmgr for long, because compton always
+felt a bit laggy when moving/resizing windows or kinetic-scrolling
+a webpage. Having tested the latest picom-10.2, it seems, things got even
+worse. However, xcompmgr does not draw shadows on argb windows (e.g.
+some terminals) and
+has several other glitches. That's why I traveled back into 2011, where
+this feature was just added, cherry picked some later compton commits
+to get rid of spurious segfaults and memleaks and made that version even
+faster, based on profiling.
+For example, window move- and resize events are limited in their
+event-count and rendered at a somewhat fixed framerate, while
+scrolling is still done as fast as possible. Occluded windows are not
+painted and memory allocations/deallocations are largely avoided,
+allowing for faster repaints of the screen.
+On the downside, fading is currently broken (I don't use it). Sorry
+for that (;
 
-## Changes from xcompmgr:
-
-* __inactive window transparency__ (specified with `-i`)
-* __titlebar/frame transparency__ (specified with `-e`)
-* menu transparency (thanks to Dana)
-* shadows are now enabled for argb windows, e.g. terminals with transparency
-* removed serverside shadows (and simple compositing) to clean the code,
-  the only option that remains is clientside shadows
-
-The above features give compton a feature set similar to the xfce compositor.
-
-Compton has only been tested with openbox so far, but frame transparency
-should work with any window manager that properly sets `_NET_FRAME_EXTENTS`.
-
-## Fixes from the original xcompmgr:
-
-* fixed a segfault when opening certain window types
-* fixed a memory leak caused by not freeing up shadows (from the freedesktop
-  repo)
 
 ## Building
 
@@ -53,10 +46,7 @@ $ make install
 ## Usage
 
 ``` bash
-$ compton -cC -t -5 -l -5 -r 5 -o 0.4 \
-  -fF -I 0.065 -O 0.065 -D 6 -m 0.8 -i 0.6 -e 0.6 &
-
-$ compton -cC -t -5 -l -5 -r 5 -o 0.4 -i 0.6 -e 0.6 &
+$ fastcompmgr -o 0.4 -r 12 -c -C
 ```
 
 ## License
@@ -68,7 +58,8 @@ particular tree is something like:
 * Matthew Hawn
 * ...
 * Dana Jansens
-* Myself
+* Christopher Jeffrey
+* Tycho Kirchner
 
 Not counting the tens of people who forked it in between.
 

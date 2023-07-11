@@ -1,15 +1,16 @@
 .ds q \N'34'
-.TH compton 1
+.TH fastcompmgr 1
 .SH NAME
-compton \- a compositor for X11
+fastcompmgr \- a _fast_ compositor for X11
 .SH SYNOPSIS
 .nf
-.B compton [\-d display] [\-r radius] [\-o opacity] [\-l left-offset] [\-t top-offset] [\-i opacity] [\-e opacity] [\-cCfFS]
+.B fastcompmgr [\-d display] [\-r radius] [\-o opacity] [\-l left-offset] [\-t top-offset] [\-i opacity] [\-e opacity] [\-cCfFS]
 .fi
 .SH DESCRIPTION
-.B compton
+.B fastcompmgr
 is a compositor based on Dana Jansens' version of xcompmgr (which itself was
-written by Keith Packard). It includes many improvements over the original
+written by Keith Packard) and on an early verion of Christopher Jeffrey's
+compton. It includes many improvements over the original
 xcompmgr, including window frame opacity, inactive window transparency,
 and shadows on argb windows.
 .SH OPTIONS
@@ -61,9 +62,10 @@ Specifies window frame transparency. (0.1 - 1.0)
 .BI \-S
 Enables synchronous operation.  Useful for debugging.
 .SH BUGS
-Please report any you find to https://github.com/chjj/compton.
+Bugs may be reported to https://github.com/tycho-kirchner/fastcompmgr
 .SH AUTHORS
 xcompmgr, originally written by Keith Packard, with contributions from
 Matthew Allum, Eric Anholt, Dan Doel, Thomas Luebking, Matthew Hawn,
 Ely Levy, Phil Blundell, and Carl Worth.
 Compton by Christopher Jeffrey, based on Dana Jansens' original work.
+fastcompmgr by Tycho Kirchner.

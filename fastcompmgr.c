@@ -1,9 +1,12 @@
 /*
- * compton - a compositor for X11
+ * fastcompmgr - a _fast_ compositor for X11
  *
  * based on xcompmgr - copyright (c) 2003, keith packard
+ *                                   2008, Dana Jansens
+ *          compton                  2011, Christopher Jeffrey
+ *          fastcompmgr              2023, Tycho Kirchner
  *
- * copyright (c) 2011, christopher jeffrey
+ * copyright (c) 2023, Tycho Kirchner
  * See LICENSE for more information.
  *
  */
