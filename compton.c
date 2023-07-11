@@ -129,6 +129,8 @@ Picture root_buffer;
 Picture black_picture;
 Picture root_tile;
 XserverRegion all_damage;
+XserverRegion g_xregion_tmp;
+Bool all_damage_is_dirty;
 Bool clip_changed;
 #if HAS_NAME_WINDOW_PIXMAP
 Bool has_name_pixmap;
@@ -308,15 +310,10 @@ set_fade(Display *dpy, win *w, double start,
   determine_mode(dpy, w);
 
   if (w->shadow) {
+    // rebuild the shadow
     XRenderFreePicture(dpy, w->shadow);
     w->shadow = None;
-
-    if (w->extents != None) {
-      XFixesDestroyRegion(dpy, w->extents);
-    }
-
-    /* rebuild the shadow */
-    w->extents = win_extents(dpy, w);
+    win_extents(dpy, w);
   }
 
   /* fading windows need to be drawn, mark
@@ -391,15 +388,10 @@ run_fades(Display *dpy) {
     determine_mode(dpy, w);
 
     if (w->shadow) {
+      // rebuild the shadow
       XRenderFreePicture(dpy, w->shadow);
       w->shadow = None;
-
-      if (w->extents != None) {
-        XFixesDestroyRegion(dpy, w->extents);
-      }
-
-      /* rebuild the shadow */
-      w->extents = win_extents(dpy, w);
+      win_extents(dpy, w);
     }
 
     /* Must do this last as it might
@@ -925,8 +917,13 @@ win_extents(Display *dpy, win *w) {
       r.height = sr.y + sr.height - r.y;
     }
   }
+  if(! w->extents){
+    w->extents = XFixesCreateRegion(dpy, &r, 1);
+  } else {
+    XFixesSetRegion(dpy, w->extents, &r, 1);
+  }
+  return w->extents;
 
-  return XFixesCreateRegion(dpy, &r, 1);
 }
 
 static XserverRegion
@@ -1058,15 +1055,6 @@ paint_all(Display *dpy, XserverRegion region) {
   Bool ignore_region_is_dirty = g_paint_ignore_region_is_dirty;
   g_paint_ignore_region_is_dirty = False;
 
-  if (!region) {
-    XRectangle r;
-    r.x = 0;
-    r.y = 0;
-    r.width = root_width;
-    r.height = root_height;
-    region = XFixesCreateRegion(dpy, &r, 1);
-  }
-
 #if MONITOR_REPAINT
   root_buffer = root_picture;
 #else
@@ -1146,22 +1134,15 @@ paint_all(Display *dpy, XserverRegion region) {
         XFixesDestroyRegion(dpy, w->border_size);
         w->border_size = None;
       }
-      if (w->extents) {
-        XFixesDestroyRegion(dpy, w->extents);
-        w->extents = None;
-      }
-      if (w->border_clip) {
-        XFixesDestroyRegion(dpy, w->border_clip);
-        w->border_clip = None;
-      }
+      win_extents(dpy, w);
     }
 
     if (!w->border_size) {
       w->border_size = border_size (dpy, w);
     }
 
-    if (!w->extents) {
-      w->extents = win_extents(dpy, w);
+    if (unlikely(!w->extents)) {
+      win_extents(dpy, w);
     }
 
     if (w->mode == WINDOW_SOLID && !HAS_FRAME_OPACITY(w)) {
@@ -1191,10 +1172,7 @@ paint_all(Display *dpy, XserverRegion region) {
         x, y, wid, hei);
     }
 
-    if (!w->border_clip) {
-      w->border_clip = XFixesCreateRegion(dpy, 0, 0);
-      XFixesCopyRegion(dpy, w->border_clip, region);
-    }
+    XFixesCopyRegion(dpy, w->border_clip, region);
 
     w->prev_trans = t;
     t = w;
@@ -1284,12 +1262,7 @@ paint_all(Display *dpy, XserverRegion region) {
           l, t, l, t, x + l, y + t, wid - l - r, hei - t - b);
       }
     }
-
-    XFixesDestroyRegion(dpy, w->border_clip);
-    w->border_clip = None;
   }
-
-  XFixesDestroyRegion(dpy, region);
 
   if (root_buffer != root_picture) {
     XFixesSetPictureClipRegion(dpy, root_buffer, 0, 0, None);
@@ -1302,11 +1275,11 @@ paint_all(Display *dpy, XserverRegion region) {
 
 static void
 add_damage(Display *dpy, XserverRegion damage) {
-  if (all_damage) {
+  if (all_damage_is_dirty) {
     XFixesUnionRegion(dpy, all_damage, all_damage, damage);
-    XFixesDestroyRegion(dpy, damage);
   } else {
-    all_damage = damage;
+    XFixesCopyRegion(dpy, all_damage, damage);
+    all_damage_is_dirty = True;
   }
 }
 
@@ -1319,7 +1292,7 @@ repair_win(Display *dpy, win *w) {
     set_ignore(dpy, NextRequest(dpy));
     XDamageSubtract(dpy, w->damage, None, None);
   } else {
-    parts = XFixesCreateRegion(dpy, 0, 0);
+    parts = g_xregion_tmp;
     set_ignore(dpy, NextRequest(dpy));
     XDamageSubtract(dpy, w->damage, None, parts);
     XFixesTranslateRegion(dpy, parts,
@@ -1473,6 +1446,10 @@ map_win(Display *dpy, Window id,
   w->a.map_state = IsViewable;
   w->window_type = determine_wintype(dpy, w->id, w->id);
 
+  if (! w->border_clip) {
+    w->border_clip = XFixesCreateRegion(dpy, 0, 0);
+  }
+
 #if 0
   printf("window 0x%x type %s\n",
     w->id, wintype_name(w->window_type));
@@ -1517,8 +1494,7 @@ finish_unmap_win(Display *dpy, win *w) {
 #endif
 
   if (w->extents != None) {
-    add_damage(dpy, w->extents);  /* destroys region */
-    w->extents = None;
+    add_damage(dpy, w->extents);
   }
 
 #if HAS_NAME_WINDOW_PIXMAP
@@ -1543,11 +1519,6 @@ finish_unmap_win(Display *dpy, win *w) {
   if (w->shadow) {
     XRenderFreePicture(dpy, w->shadow);
     w->shadow = None;
-  }
-
-  if (w->border_clip) {
-    XFixesDestroyRegion(dpy, w->border_clip);
-    w->border_clip = None;
   }
 
   clip_changed = True;
@@ -1663,10 +1634,7 @@ determine_mode(Display *dpy, win *w) {
   w->mode = mode;
 
   if (w->extents) {
-    XserverRegion damage;
-    damage = XFixesCreateRegion(dpy, 0, 0);
-    XFixesCopyRegion(dpy, damage, w->extents);
-    add_damage(dpy, damage);
+    add_damage(dpy, w->extents);
   }
 }
 
@@ -1682,15 +1650,10 @@ set_opacity(Display *dpy, win *w, unsigned long opacity) {
     w->opacity = opacity;
     determine_mode(dpy, w);
     if (w->shadow) {
+      // rebuild the shadow
       XRenderFreePicture(dpy, w->shadow);
       w->shadow = None;
-
-      if (w->extents != None) {
-        XFixesDestroyRegion(dpy, w->extents);
-      }
-
-      /* rebuild the shadow */
-      w->extents = win_extents(dpy, w);
+      win_extents(dpy, w);
     }
   }
   set_paint_ignore_region_dirty();
@@ -1817,21 +1780,9 @@ restack_win(Display *dpy, win *w, Window new_above) {
 
 static void
 do_configure_win(Display *dpy, win* w){
-  XserverRegion damage = None;
   XConfigureEvent* ce = &w->queue_configure;
 
   w->need_configure = False;
-
-#if CAN_DO_USABLE
-  if (w->usable)
-#endif
-  {
-    damage = XFixesCreateRegion(dpy, 0, 0);
-    if (w->extents != None)
-      XFixesCopyRegion(dpy, damage, w->extents);
-  }
-
-
   w->a.x = ce->x;
   w->a.y = ce->y;
   if (w->a.width != ce->width || w->a.height != ce->height) {
@@ -1857,11 +1808,16 @@ do_configure_win(Display *dpy, win* w){
   w->a.height = ce->height;
   w->a.border_width = ce->border_width;
 
-  if (w->a.map_state != IsUnmapped && damage) {
-    XserverRegion extents = win_extents(dpy, w);
-    XFixesUnionRegion(dpy, damage, damage, extents);
-    XFixesDestroyRegion(dpy, extents);
-    add_damage(dpy, damage);
+  if (w->a.map_state != IsUnmapped
+#if CAN_DO_USABLE
+    && w->usable
+#endif
+      ) {
+    // both, the old and new window position/size are damaged.
+    if (likely(w->extents != None)) {
+      add_damage(dpy, w->extents);
+    }
+    add_damage(dpy, win_extents(dpy, w));
   }
 
   clip_changed = True;
@@ -1949,6 +1905,15 @@ finish_destroy_win(Display *dpy, Window id) {
       }
 
       cleanup_fade(dpy, w);
+
+      if (w->border_clip) {
+        XFixesDestroyRegion(dpy, w->border_clip);
+        w->border_clip = None;
+      }
+      if(w->extents){
+        XFixesDestroyRegion(dpy, w->extents);
+        w->extents = None;
+      }
       free(w);
       break;
     }
@@ -2127,9 +2092,8 @@ error(Display *dpy, XErrorEvent *ev) {
 
 static void
 expose_root(Display *dpy, Window root, XRectangle *rects, int nrects) {
-  XserverRegion region = XFixesCreateRegion(dpy, rects, nrects);
-
-  add_damage(dpy, region);
+  XFixesSetRegion(dpy, g_xregion_tmp, rects, nrects);
+  add_damage(dpy, g_xregion_tmp);
 }
 
 #if DEBUG_EVENTS
@@ -2304,7 +2268,7 @@ static void
 do_paint(Display *dpy){
    paint_all(dpy, all_damage);
    XSync(dpy, False);
-   all_damage = None;
+   all_damage_is_dirty = False;
    clip_changed = False;
 }
 
@@ -2341,7 +2305,7 @@ check_paint(Display *dpy){
       do_paint(dpy);
     }
   } else {
-    if(likely(all_damage)) {
+    if(likely(all_damage_is_dirty)) {
       do_paint(dpy);
     }
   }
@@ -2551,7 +2515,11 @@ main(int argc, char **argv) {
     CPSubwindowMode, &pa);
   black_picture = solid_picture(dpy, True, 1, 0, 0, 0);
 
-  all_damage = None;
+
+  all_damage = XFixesCreateRegion(dpy, 0, 0);
+  all_damage_is_dirty = False;
+  g_xregion_tmp = XFixesCreateRegion(dpy, 0, 0);
+
   clip_changed = True;
   XGrabServer(dpy);
 
@@ -2578,7 +2546,12 @@ main(int argc, char **argv) {
   ufd.fd = ConnectionNumber(dpy);
   ufd.events = POLLIN;
 
-  paint_all(dpy, None);
+  {
+    XRectangle root_rect = { .x=0, .y=0,
+                             .width=root_width , .height=root_height };
+    XFixesSetRegion(dpy, g_xregion_tmp, &root_rect, 1);
+    paint_all(dpy, g_xregion_tmp);
+  }
 
   for (;;) {
     /*    dump_wins(); */
