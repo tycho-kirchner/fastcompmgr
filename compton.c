@@ -26,6 +26,7 @@
 #include <X11/extensions/Xrender.h>
 
 #include "comp_rect.h"
+#include "ringbuffer.h"
 
 #define likely(x)       __builtin_expect(!!(x), 1)
 #define unlikely(x)     __builtin_expect(!!(x), 0)
@@ -136,7 +137,9 @@ Bool clip_changed;
 Bool has_name_pixmap;
 #endif
 int root_height, root_width;
-ignore *ignore_head, **ignore_tail = &ignore_head;
+ringBuffer_typedef(ulong, IgnoreErrRingbuf);
+IgnoreErrRingbuf ignore_ringbuf;
+IgnoreErrRingbuf* p_ignore_ringbuf = &ignore_ringbuf;
 int xfixes_event, xfixes_error;
 int damage_event, damage_error;
 int composite_event, composite_error;
@@ -744,14 +747,11 @@ solid_picture(Display *dpy, Bool argb, double a,
 
 void
 discard_ignore(Display *dpy, unsigned long sequence) {
-  while (ignore_head) {
-    if ((long) (sequence - ignore_head->sequence) > 0) {
-      ignore  *next = ignore_head->next;
-      free(ignore_head);
-      ignore_head = next;
-      if (!ignore_head) {
-        ignore_tail = &ignore_head;
-      }
+  while(! isBufferEmpty(p_ignore_ringbuf)){
+    ulong buf_seq;
+    buf_seq = bufferReadPeek(p_ignore_ringbuf);
+    if ((long) (sequence - buf_seq) > 0) {
+      bufferReadSkip(p_ignore_ringbuf);
     } else {
       break;
     }
@@ -760,19 +760,19 @@ discard_ignore(Display *dpy, unsigned long sequence) {
 
 void
 set_ignore(Display *dpy, unsigned long sequence) {
-  ignore *i = malloc(sizeof(ignore));
-  if (!i) return;
-
-  i->sequence = sequence;
-  i->next = 0;
-  *ignore_tail = i;
-  ignore_tail = &i->next;
+  if(unlikely(isBufferFull(p_ignore_ringbuf))) {
+    bufferIncrease(p_ignore_ringbuf, p_ignore_ringbuf->size*2);
+  }
+  bufferWrite(p_ignore_ringbuf, sequence);
 }
 
 int
 should_ignore(Display *dpy, unsigned long sequence) {
+  ulong buf_seq;
   discard_ignore(dpy, sequence);
-  return ignore_head && ignore_head->sequence == sequence;
+  if(isBufferEmpty(p_ignore_ringbuf)) return False;
+  buf_seq = bufferReadPeek(p_ignore_ringbuf);
+  return buf_seq == sequence;
 }
 
 static win *
@@ -2329,6 +2329,7 @@ main(int argc, char **argv) {
   char *display = 0;
   int o;
   Bool no_dock_shadow = False;
+  bufferInit(ignore_ringbuf, 2048, ulong);
 
   for (i = 0; i < NUM_WINTYPES; ++i) {
     win_type_fade[i] = False;
