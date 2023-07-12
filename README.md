@@ -7,8 +7,8 @@ of __xcompmgr__.
 I used to use good old xcompmgr for long, because compton always
 felt a bit laggy when moving/resizing windows or kinetic-scrolling
 a webpage. Having tested the latest picom-10.2, it seems, things got even
-worse. However, xcompmgr does not draw shadows on argb windows (e.g.
-some terminals) and
+worse (see benchmark below). However, xcompmgr does not draw shadows
+on argb windows (e.g. some terminals) and
 has several other glitches. That's why I traveled back into 2011, where
 this feature was just added, cherry picked some later compton commits
 to get rid of spurious segfaults and memleaks and made that version even
@@ -20,6 +20,38 @@ painted and memory allocations/deallocations are largely avoided,
 allowing for faster repaints of the screen.
 On the downside, fading is currently broken (I don't use it). Sorry
 for that (;
+
+## Benchmark
+While on my Dell Latitude E5570 window moving, resizing and scrolling
+*feels* clearly faster, there are also some numbers to support this
+observation. Given a number of stacked chromium-windows, where no window
+is fully occluded, I performed the respective operations *by hand*,
+so please beware that the benchmark is not very sophisticated. The touchpad
+driver `xserver-xorg-input-synaptics` was used which enables for kinetic
+scrolling (Wayland anyone?). The following CPU usages were measured:
+
+| Compositor    | move  | resize  | scroll |
+| ------------- | ----- | ------- | ------ |
+| fastcompmgr   | 6.7%  | 4.4%    | 1.5%   |
+| xcompmgr      | 7.8%  | 4.9%    | 1.6%   |
+| compton       | 26.4% | 6.8%    | 17.1%  |
+| picom         | 29.3% | 8.1%    | 23.1%  |
+
+
+Tools were used with the following flags:
+~~~
+(v0.1) fastcompmgr -o 0.4 -r 12 -c -C
+(v1.1.8 from Debian 11) xcompmgr -o 0.4 -r 12 -c -C
+(v1 from Debian 11) compton --config /dev/null --backend xrender -o 0.4 -r 12 -c -C
+(v10.2) picom --config /dev/null --backend xrender -o 0.4 -r 12 -c
+
+# Calc average using
+$ fastcompmgr -o 0.4 -r 12 -c -C &  pid=$!; sleep 4; \
+    top -b -n 20 -d 0.5 -p $pid | LC_ALL=C awk -v pid=$pid \
+    '$1==PID {++PIDCOUNT} $1==pid && PIDCOUNT>1 {print $9}' |  \
+    datamash mean 1; kill $pid
+~~~
+
 
 
 ## Building
@@ -38,16 +70,16 @@ The same dependencies as xcompmgr.
 
 To build, make sure you have the above dependencies:
 
-``` bash
+~~~ bash
 $ make
 $ make install
-```
+~~~
 
 ## Usage
 
-``` bash
+~~~ bash
 $ fastcompmgr -o 0.4 -r 12 -c -C
-```
+~~~
 
 ## License
 
