@@ -2172,7 +2172,7 @@ ev_window(XEvent *ev) {
 
 void
 usage(char *program) {
-  fprintf(stderr, "%s v0.1\n", program);
+  fprintf(stderr, "%s v0.2\n", program);
   fprintf(stderr, "usage: %s [options]\n", program);
 
   fprintf(stderr, "Options\n");
