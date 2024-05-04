@@ -1094,19 +1094,22 @@ paint_all(Display *dpy, XserverRegion region) {
     //   do_configure_win(dpy, w);
     // }
 
+#if CAN_DO_USABLE
+    if (!w->usable) continue;
+#endif
+
+    /* never painted, ignore it */
+    if (likely(!w->damaged)) continue;
+
+    // Note that undamaged windows should not contribute to the ignore
+    // region. Otherwise VBoxManager makes other windows disappear during startup.
     if(unlikely(ignore_region_is_dirty)){
       // maybe_todo: pass only clipped rects, actually visible on screen.
       // Now we may choose the ignore region from a big window which
       // resides largely outside the screen.
       w->paint_needed = win_paint_needed(w, &ignore_reg);
     }
-
-#if CAN_DO_USABLE
-    if (!w->usable) continue;
-#endif
-
-    /* never painted, ignore it */
-    if (likely(!w->damaged || !w->paint_needed)) continue;
+    if(!w->paint_needed) continue;
 
     if (!w->picture) {
       XRenderPictureAttributes pa;
@@ -1472,6 +1475,7 @@ map_win(Display *dpy, Window id,
   w->damage_bounds.width = w->damage_bounds.height = 0;
 #endif
   w->damaged = 0;
+  w->paint_needed = True;
 
   if (fade && win_type_fade[w->window_type]) {
     set_fade(
