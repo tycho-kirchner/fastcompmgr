@@ -54,9 +54,10 @@ $ fastcompmgr -o 0.4 -r 12 -c -C &  pid=$!; sleep 4; \
 
 
 
-## Building
+## Installation
+If you're lazy, just grab the binary from the [release page](https://github.com/tycho-kirchner/fastcompmgr/releases).
 
-The same dependencies as xcompmgr.
+Otherwise, build dependencies are the same as for xcompmgr:
 
 ### Dependencies:
 
@@ -68,7 +69,7 @@ The same dependencies as xcompmgr.
 * pkg-config
 * make
 
-To build, make sure you have the above dependencies:
+To build:
 
 ~~~ bash
 $ make
