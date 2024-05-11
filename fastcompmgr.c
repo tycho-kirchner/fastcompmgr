@@ -1042,7 +1042,11 @@ win_paint_needed(win* w, CompRect* ignore_reg){
       return False;
     }
     // Unmapped, destroyed or translucent windows must not contribute to the ignore region.
-    if (w->a.map_state != IsViewable || w->destroyed || w->opacity != OPAQUE){
+    // Same applies to override_redirect windows, which some screenshooter apps employ
+    // (s. e.g. xfce4-screenshooter
+    // screenshooter-capture.c::get_rectangle_screenshot_composited )
+    if (w->a.map_state != IsViewable || w->destroyed || w->opacity != OPAQUE ||
+        w->a.override_redirect){
       return True;
     }
     CompRect w_rect = {.x1 = w->a.x, .y1 = w->a.y,
