@@ -873,7 +873,17 @@ win_extents(Display *dpy, win *w) {
   r.height = w->a.height + w->a.border_width * 2;
 
   if (likely(w->window_type)
-      && win_type_shadow[w->window_type]) {
+      && win_type_shadow[w->window_type] &&
+      // Looking at xlib's documentation for the "Override Redirect Flag", it becomes
+      // clear that toolkits will typically set this flag for popup windows.
+      // On the other hand, WINTYPE_NORMAL windows setting override_redirect, are likely
+      // some kind of special windows, as seen in zoom screenshare. At least in zoom's case,
+      // the shadow darkens the whole desktop. A better fix might be to render
+      // four shadow images around the window instead of one huge shadow. But first
+      // check, why dcompmgr does not have this problem.
+      // See also: https://github.com/regolith-linux/regolith-compositor-compton-glx/issues/3
+      (! w->a.override_redirect || w->window_type != WINTYPE_NORMAL)
+      ) {
     XRectangle sr;
 
     w->shadow_dx = shadow_offset_x;
