@@ -221,6 +221,17 @@ int Gsize = -1;
 unsigned char *shadow_corner = NULL;
 unsigned char *shadow_top = NULL;
 
+static inline bool
+validate_pixmap(Display* dpy, Pixmap pxmap) {
+  if (!pxmap) return false;
+
+  Window rroot = None;
+  int rx = 0, ry = 0;
+  unsigned rwid = 0, rhei = 0, rborder = 0, rdepth = 0;
+  return XGetGeometry(dpy, pxmap, &rroot, &rx, &ry,
+        &rwid, &rhei, &rborder, &rdepth) && rwid && rhei;
+}
+
 int
 get_time_in_milliseconds() {
   struct timeval tv;
@@ -818,18 +829,27 @@ root_tile_f(Display *dpy) {
           XInternAtom(dpy, background_props[p], False),
           0, 4, False, AnyPropertyType, &actual_type,
           &actual_format, &nitems, &bytes_after, &prop);
-    if (likely(res == Success && prop != NULL )) {
-      if(actual_type == atom_pixmap
-            && actual_format == 32 && nitems == 1) {
-        memcpy(&pixmap, prop, 4);
-      }
-      XFree(prop);
+    if (res != Success || prop == NULL ){
+      continue;
+    }
+    if(actual_type == atom_pixmap
+          && actual_format == 32 && nitems == 1) {
+      memcpy(&pixmap, prop, 4);
+    }
+    XFree(prop);
+    // In some window managers without managed desktops or also in some versions of
+    // xfce (4.18), the found pixmap has a size if zero. In this case, we'll create
+    // the pixmap ourselves (below this loop).
+    if(validate_pixmap(dpy, pixmap)){
       fill = False;
       break;
+    } else {
+      pixmap = None;
     }
   }
 
   if (!pixmap) {
+    // fprintf(stderr, "info: no valid pixmap found from bg\n");
     pixmap = XCreatePixmap(dpy, root, 1, 1, DefaultDepth(dpy, scr));
     fill = True;
   }
