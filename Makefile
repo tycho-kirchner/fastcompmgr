@@ -2,8 +2,11 @@ PACKAGES = x11 xcomposite xfixes xdamage xrender
 LIBS = `pkg-config --libs ${PACKAGES}` -lm
 INCS = `pkg-config --cflags ${PACKAGES}`
 CFLAGS = -Wall -O3 -flto
-PREFIX = /usr/local
-MANDIR = ${PREFIX}/share/man/man1
+BIN = /usr/local/bin
+
+# This should get all the possible man's path
+# And split the char ':' into a new line
+MANPATH = $(shell manpath | tr ':' '\n')
 
 OBJS=fastcompmgr.o comp_rect.o
 
@@ -14,13 +17,29 @@ fastcompmgr: $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $(OBJS) $(LIBS)
 
 install: fastcompmgr
-	@cp -t ${PREFIX}/bin fastcompmgr
-	@[ -d "${MANDIR}" ] \
-	  && cp -t "${MANDIR}" fastcompmgr.1
+	@echo "[=] Installing fastcompmgr"
+	@cp -t ${BIN} fastcompmgr
+	@echo "[+] fastcompmgr copied to bin!"
+	@for dir in $(MANPATH); do \
+		MANDIR=$$(find "$$dir" -type d -path "*/man/man1"); \
+		if [ -n "$$MANDIR" ]; then \
+			echo "[=] Creating fastcompmgr man: $$MANDIR"; \
+			cp -t "$$MANDIR" fastcompmgr.1; \
+			echo "[+] fastcompmgr man created!"; \
+			break; \
+		fi \
+	done
+	@echo "[!] fastcompmgr sucessfully installed!"
 
 uninstall:
-	@rm -f ${PREFIX}/fastcompmgr
-	@rm -f ${MANDIR}/fastcompmgr.1
+	@rm -f ${BIN}/fastcompmgr
+	@for dir in $(MANPATH); do \
+		MANDIR=$$(find "$$dir" -type d -path "*/man/man1"); \
+		if [ -n "$$MANDIR" ]; then \
+			rm -f "$${MANDIR}/fastcompmgr.1"; \
+			break; \
+		fi \
+	done
 
 clean:
 	rm -f $(OBJS) fastcompmgr
