@@ -2262,38 +2262,48 @@ usage(char *program) {
   exit(1);
 }
 
-static void
-register_cm(int scr) {
+static Bool
+register_cm (Display *dpy)
+{
   Window w;
   Atom a;
-  char *buf;
-  int len, s;
+  static char net_wm_cm[] = "_NET_WM_CM_Sxx";
 
-  if (scr < 0) return;
+  snprintf (net_wm_cm, sizeof (net_wm_cm), "_NET_WM_CM_S%d", scr);
+  a = XInternAtom (dpy, net_wm_cm, False);
+  w = XGetSelectionOwner (dpy, a);
+  if (w != None) {
+    XTextProperty tp;
+    char **strs;
+    int count;
+    Atom winNameAtom = XInternAtom (dpy, "_NET_WM_NAME", False);
 
-  w = XCreateSimpleWindow(
-    dpy, RootWindow(dpy, 0),
-    0, 0, 1, 1, 0, None, None);
-
-  Xutf8SetWMProperties(
-    dpy, w, "xcompmgr", "xcompmgr",
-    NULL, 0, NULL, NULL, NULL);
-
-  len = strlen(REGISTER_PROP) + 2;
-  s = scr;
-
-  while (s >= 10) {
-    ++len;
-    s /= 10;
+    if (!XGetTextProperty (dpy, w, &tp, winNameAtom) &&
+        !XGetTextProperty (dpy, w, &tp, XA_WM_NAME))
+    {
+      fprintf (stderr,
+         "Another composite manager is already running (0x%lx)\n",
+         (unsigned long) w);
+      return False;
+    }
+    if (XmbTextPropertyToTextList (dpy, &tp, &strs, &count) == Success)
+    {
+      fprintf (stderr,
+         "Another composite manager is already running (%s)\n", strs[0]);
+      XFreeStringList (strs);
+    }
+    XFree (tp.value);
+    return False;
   }
 
-  buf = malloc(len);
-  snprintf(buf, len, REGISTER_PROP"%d", scr);
+  w = XCreateSimpleWindow (dpy, RootWindow (dpy, scr), 0, 0, 1, 1, 0, None,
+          None);
 
-  a = XInternAtom(dpy, buf, False);
-  free(buf);
+  Xutf8SetWMProperties (dpy, w, "fastcompmgr", "fastcompmgr", NULL, 0, NULL, NULL,
+      NULL);
 
-  XSetSelectionOwner(dpy, a, w, 0);
+  XSetSelectionOwner (dpy, a, w, 0);
+  return True;
 }
 
 static void run_configures(Display *dpy){
@@ -2502,7 +2512,8 @@ main(int argc, char **argv) {
     exit(1);
   }
 
-  register_cm(scr);
+  if(! register_cm(dpy))
+    exit(1);
 
   /* get atoms */
   atom_opacity = XInternAtom(dpy,
@@ -2722,6 +2733,11 @@ main(int argc, char **argv) {
                 get_opacity_prop(dpy, w, (unsigned long)(OPAQUE * def)));
             }
           }
+          break;
+        case SelectionClear:
+          fprintf(stderr, "Another composite manager started and took the _NET_WM_CM_Sn "
+	          "selection. Bye.\n");
+          exit(0);
           break;
         default:
           if (likely(ev.type == damage_event + XDamageNotify)) {
