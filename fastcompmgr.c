@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <limits.h>
 #include <math.h>
 #include <sys/poll.h>
 #include <sys/time.h>
@@ -60,6 +61,14 @@ typedef enum {
   NUM_WINTYPES
 } wintype;
 
+
+// Cache whether to draw a shadow or not
+typedef enum {
+  SHADOW_UNKNWON, // MUST ALWAYS STAY first, due to init optimization in add_win
+  SHADOW_YES,
+  SHADOW_NO
+} shadowtype;
+
 typedef struct _ignore {
   struct _ignore *next;
   unsigned long sequence;
@@ -92,6 +101,7 @@ typedef struct _win {
   int shadow_height;
   unsigned int opacity;
   wintype window_type;
+  shadowtype shadow_type;
   unsigned long damage_sequence; /* sequence when damage was created */
   Bool destroyed;
   Bool paint_needed;
@@ -157,6 +167,7 @@ Atom atom_win_type;
 Atom atom_pixmap;
 Atom atom_wm_state;
 Atom atom_net_frame_extents;
+Atom atom_gtk_frame_extents;
 Atom win_type[NUM_WINTYPES];
 double win_type_opacity[NUM_WINTYPES];
 Bool win_type_shadow[NUM_WINTYPES];
@@ -182,6 +193,8 @@ conv *gaussian_map;
 
 static void
 determine_mode(Display *dpy, win *w);
+static bool
+is_gtk_frame_extent(Display *dpy, Window w);
 
 static double
 get_opacity_percent(Display *dpy, win *w);
@@ -892,18 +905,22 @@ win_extents(Display *dpy, win *w) {
   r.width = w->a.width + w->a.border_width * 2;
   r.height = w->a.height + w->a.border_width * 2;
 
-  if (likely(w->window_type)
+  if(unlikely(w->shadow_type)==SHADOW_UNKNWON){
+    // override_redirect: looking at xlib's documentation for the "Override Redirect Flag", it becomes
+    // clear that toolkits will typically set this flag for popup windows.
+    // On the other hand, WINTYPE_NORMAL windows setting override_redirect, are likely
+    // some kind of special windows, as seen in zoom screenshare. At least in zoom's case,
+    // the shadow darkens the whole desktop. A better fix might be to render
+    // four shadow images around the window instead of one huge shadow. But first
+    // check, why dcompmgr does not have this problem.
+    // See also: https://github.com/regolith-linux/regolith-compositor-compton-glx/issues/3
+    w->shadow_type = (likely(w->window_type)
       && win_type_shadow[w->window_type] &&
-      // Looking at xlib's documentation for the "Override Redirect Flag", it becomes
-      // clear that toolkits will typically set this flag for popup windows.
-      // On the other hand, WINTYPE_NORMAL windows setting override_redirect, are likely
-      // some kind of special windows, as seen in zoom screenshare. At least in zoom's case,
-      // the shadow darkens the whole desktop. A better fix might be to render
-      // four shadow images around the window instead of one huge shadow. But first
-      // check, why dcompmgr does not have this problem.
-      // See also: https://github.com/regolith-linux/regolith-compositor-compton-glx/issues/3
-      (! w->a.override_redirect || w->window_type != WINTYPE_NORMAL)
-      ) {
+      (! w->a.override_redirect || w->window_type != WINTYPE_NORMAL) &&
+      ! is_gtk_frame_extent(dpy, w->id)) ? SHADOW_YES : SHADOW_NO;
+  }
+
+  if (w->shadow_type == SHADOW_YES) {
     XRectangle sr;
 
     w->shadow_dx = shadow_offset_x;
@@ -1593,6 +1610,22 @@ unmap_win(Display *dpy, Window id, Bool fade) {
   } else
 #endif
     finish_unmap_win(dpy, w);
+}
+
+static bool is_gtk_frame_extent(Display *dpy, Window w){
+  Atom type;
+  int format;
+  unsigned long nitems, after;
+  unsigned char *data = NULL;
+  int result;
+
+  result = XGetWindowProperty(dpy, w, atom_gtk_frame_extents, 0, LONG_MAX,
+    false, XA_CARDINAL, &type, &format, &nitems, &after, (unsigned char **)&data);
+  if (result == Success && data!=NULL) {
+    XFree((void *)data);
+    return nitems == 4 ;
+  }
+  return false;
 }
 
 /* Get the opacity prop from window
@@ -2525,7 +2558,9 @@ main(int argc, char **argv) {
   atom_wm_state = XInternAtom(dpy,
     "WM_STATE", False);
   atom_net_frame_extents = XInternAtom(dpy,
-    "_NET_FRAME_EXTENTS", False),
+    "_NET_FRAME_EXTENTS", False);
+  atom_gtk_frame_extents = XInternAtom(dpy,
+    "_GTK_FRAME_EXTENTS", False);
   win_type[WINTYPE_DESKTOP] = XInternAtom(dpy,
     "_NET_WM_WINDOW_TYPE_DESKTOP", False);
   win_type[WINTYPE_DOCK] = XInternAtom(dpy,
