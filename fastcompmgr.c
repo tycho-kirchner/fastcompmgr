@@ -333,10 +333,6 @@ set_fade(Display *dpy, win *w, double start,
   f->callback = callback;
   w->opacity = f->cur * OPAQUE;
 
-#if 0
-  printf("set_fade start %g step %g\n", f->cur, f->step);
-#endif
-
   determine_mode(dpy, w);
 
   if (w->shadow) {
@@ -346,12 +342,6 @@ set_fade(Display *dpy, win *w, double start,
     win_extents(dpy, w);
   }
 
-  /* fading windows need to be drawn, mark
-     them as damaged.  when a window maps,
-     if it tries to fade in but it already
-     at the right opacity (map/unmap/map fast)
-     then it will never get drawn without this
-     until it repaints */
   w->damaged = 1;
 }
 
@@ -2395,7 +2385,6 @@ check_paint(Display *dpy){
   }
 }
 
-
 int
 main(int argc, char **argv) {
   XEvent ev;
@@ -2649,7 +2638,7 @@ main(int argc, char **argv) {
         int timeout = (configure_timer_started) ? 2 : fade_timeout();
         if (unlikely(poll(&ufd, 1, timeout) == 0)) {
           check_paint(dpy);
-           //   run_fades(dpy);
+          run_fades(dpy);
           break;
         }
       }
