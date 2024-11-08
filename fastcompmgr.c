@@ -29,6 +29,8 @@
 #include <X11/extensions/Xdamage.h>
 #include <X11/extensions/Xrender.h>
 
+#include "cm-global.h"
+#include "cm-root.h"
 #include "comp_rect.h"
 #include "ringbuffer.h"
 
@@ -136,10 +138,6 @@ typedef struct _fade {
 win *list;
 fade *fades;
 Display *dpy;
-int scr;
-Window root;
-Picture root_picture;
-Picture root_buffer;
 Picture black_picture;
 Picture root_tile;
 XserverRegion all_damage;
@@ -149,7 +147,6 @@ Bool clip_changed;
 #if HAS_NAME_WINDOW_PIXMAP
 Bool has_name_pixmap;
 #endif
-int root_height, root_width;
 ringBuffer_typedef(ulong, IgnoreErrRingbuf);
 IgnoreErrRingbuf ignore_ringbuf;
 IgnoreErrRingbuf* p_ignore_ringbuf = &ignore_ringbuf;
@@ -161,13 +158,6 @@ Bool synchronize;
 int composite_opcode;
 static Bool g_paint_ignore_region_is_dirty = True;
 
-/* find these once and be done with it */
-Atom atom_opacity;
-Atom atom_win_type;
-Atom atom_pixmap;
-Atom atom_wm_state;
-Atom atom_net_frame_extents;
-Atom atom_gtk_frame_extents;
 Atom win_type[NUM_WINTYPES];
 double win_type_opacity[NUM_WINTYPES];
 Bool win_type_shadow[NUM_WINTYPES];
@@ -234,16 +224,6 @@ int Gsize = -1;
 unsigned char *shadow_corner = NULL;
 unsigned char *shadow_top = NULL;
 
-static inline bool
-validate_pixmap(Display* dpy, Pixmap pxmap) {
-  if (!pxmap) return false;
-
-  Window rroot = None;
-  int rx = 0, ry = 0;
-  unsigned rwid = 0, rhei = 0, rborder = 0, rdepth = 0;
-  return XGetGeometry(dpy, pxmap, &rroot, &rx, &ry,
-        &rwid, &rhei, &rborder, &rdepth) && rwid && rhei;
-}
 
 int
 get_time_in_milliseconds() {
@@ -814,80 +794,10 @@ find_win(Display *dpy, Window id) {
   return 0;
 }
 
-static const char *background_props[] = {
-  "_XROOTPMAP_ID",
-  "_XSETROOT_ID",
-  0,
-};
-
-static Picture
-root_tile_f(Display *dpy) {
-  Picture picture;
-  Atom actual_type;
-  Pixmap pixmap;
-  int actual_format;
-  unsigned long nitems;
-  unsigned long bytes_after;
-  unsigned char *prop;
-  Bool fill;
-  XRenderPictureAttributes pa;
-  int p;
-  int res;
-
-  pixmap = None;
-
-  for (p = 0; background_props[p]; p++) {
-    prop = NULL;
-    res = XGetWindowProperty(dpy, root,
-          XInternAtom(dpy, background_props[p], False),
-          0, 4, False, AnyPropertyType, &actual_type,
-          &actual_format, &nitems, &bytes_after, &prop);
-    if (res != Success || prop == NULL ){
-      continue;
-    }
-    if(actual_type == atom_pixmap
-          && actual_format == 32 && nitems == 1) {
-      memcpy(&pixmap, prop, 4);
-    }
-    XFree(prop);
-    // In some window managers without managed desktops or also in some versions of
-    // xfce (4.18), the found pixmap has a size if zero. In this case, we'll create
-    // the pixmap ourselves (below this loop).
-    if(validate_pixmap(dpy, pixmap)){
-      fill = False;
-      break;
-    } else {
-      pixmap = None;
-    }
-  }
-
-  if (!pixmap) {
-    // fprintf(stderr, "info: no valid pixmap found from bg\n");
-    pixmap = XCreatePixmap(dpy, root, 1, 1, DefaultDepth(dpy, scr));
-    fill = True;
-  }
-
-  pa.repeat = True;
-  picture = XRenderCreatePicture(
-    dpy, pixmap, XRenderFindVisualFormat(dpy, DefaultVisual(dpy, scr)),
-    CPRepeat, &pa);
-
-  if (fill) {
-    XRenderColor  c;
-
-    c.red = c.green = c.blue = 0x8080;
-    c.alpha = 0xffff;
-    XRenderFillRectangle(
-      dpy, PictOpSrc, picture, &c, 0, 0, 1, 1);
-  }
-
-  return picture;
-}
-
 static void
 paint_root(Display *dpy) {
   if (!root_tile) {
-    root_tile = root_tile_f(dpy);
+    root_tile = root_create_tile();
   }
 
   XRenderComposite(
@@ -1115,10 +1025,10 @@ paint_all(Display *dpy, XserverRegion region) {
   if (!root_buffer) {
     Pixmap rootPixmap = XCreatePixmap(
       dpy, root, root_width, root_height,
-      DefaultDepth(dpy, scr));
+      DefaultDepth(dpy, g_screen));
 
     root_buffer = XRenderCreatePicture(dpy, rootPixmap,
-      XRenderFindVisualFormat(dpy, DefaultVisual(dpy, scr)),
+      XRenderFindVisualFormat(dpy, DefaultVisual(dpy, g_screen)),
       0, 0);
 
     XFreePixmap(dpy, rootPixmap);
@@ -2302,7 +2212,7 @@ register_cm (Display *dpy)
   Atom a;
   static char net_wm_cm[] = "_NET_WM_CM_Sxx";
 
-  snprintf (net_wm_cm, sizeof (net_wm_cm), "_NET_WM_CM_S%d", scr);
+  snprintf (net_wm_cm, sizeof (net_wm_cm), "_NET_WM_CM_S%d", g_screen);
   a = XInternAtom (dpy, net_wm_cm, False);
   w = XGetSelectionOwner (dpy, a);
   if (w != None) {
@@ -2329,7 +2239,7 @@ register_cm (Display *dpy)
     return False;
   }
 
-  w = XCreateSimpleWindow (dpy, RootWindow (dpy, scr), 0, 0, 1, 1, 0, None,
+  w = XCreateSimpleWindow (dpy, RootWindow (dpy, g_screen), 0, 0, 1, 1, 0, None,
           None);
 
   Xutf8SetWMProperties (dpy, w, "fastcompmgr", "fastcompmgr", NULL, 0, NULL, NULL,
@@ -2403,7 +2313,6 @@ main(int argc, char **argv) {
   Window *children;
   unsigned int nchildren;
   int i;
-  XRenderPictureAttributes pa;
   XRectangle *expose_rects = 0;
   int size_expose = 0;
   int n_expose = 0;
@@ -2507,14 +2416,15 @@ main(int argc, char **argv) {
     fprintf(stderr, "Can't open display\n");
     exit(1);
   }
+  g_dpy = dpy;
 
   XSetErrorHandler(error);
   if (synchronize) {
     XSynchronize(dpy, 1);
   }
 
-  scr = DefaultScreen(dpy);
-  root = RootWindow(dpy, scr);
+  g_screen = DefaultScreen(dpy);
+  root = RootWindow(dpy, g_screen);
 
   if (!XRenderQueryExtension(dpy, &render_event, &render_error)) {
     fprintf(stderr, "No render extension\n");
@@ -2590,17 +2500,13 @@ main(int argc, char **argv) {
   win_type[WINTYPE_DND] = XInternAtom(dpy,
     "_NET_WM_WINDOW_TYPE_DND", False);
 
-  pa.subwindow_mode = IncludeInferiors;
-
   gaussian_map = make_gaussian_map(dpy, shadow_radius);
   presum_gaussian(gaussian_map);
 
-  root_width = DisplayWidth(dpy, scr);
-  root_height = DisplayHeight(dpy, scr);
+  if(!root_init()){
+    exit(1);
+  }
 
-  root_picture = XRenderCreatePicture(dpy, root,
-    XRenderFindVisualFormat(dpy, DefaultVisual(dpy, scr)),
-    CPSubwindowMode, &pa);
   black_picture = solid_picture(dpy, True, 1, 0, 0, 0);
 
 
@@ -2747,9 +2653,9 @@ main(int argc, char **argv) {
           }
           break;
         case PropertyNotify:
-          for (p = 0; background_props[p]; p++) {
+          for (p = 0; root_background_props[p]; p++) {
             if (ev.xproperty.atom ==
-                XInternAtom(dpy, background_props[p], False)) {
+                XInternAtom(dpy, root_background_props[p], False)) {
               if (root_tile) {
                 XClearArea(dpy, root, 0, 0, 0, 0, True);
                 XRenderFreePicture(dpy, root_tile);

@@ -5,7 +5,7 @@ CFLAGS = -Wall -O3 -flto
 PREFIX = /usr/local
 MANDIR = ${PREFIX}/share/man/man1
 
-OBJS=fastcompmgr.o comp_rect.o
+OBJS=fastcompmgr.o comp_rect.o cm-root.o cm-global.o
 
 .c.o:
 	$(CC) $(CFLAGS) $(INCS) -c $*.c
