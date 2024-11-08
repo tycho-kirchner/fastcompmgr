@@ -113,6 +113,7 @@ typedef struct _win {
   unsigned int bottom_width;
 
   Bool need_configure;
+  bool configure_size_changed;
   XConfigureEvent queue_configure;
 
   /* for drawing translucent windows */
@@ -1769,7 +1770,7 @@ do_configure_win(Display *dpy, win* w){
   w->need_configure = False;
   w->a.x = ce->x;
   w->a.y = ce->y;
-  if (w->a.width != ce->width || w->a.height != ce->height) {
+  if (w->configure_size_changed) {
 
 #if HAS_NAME_WINDOW_PIXMAP
     if (w->pixmap) {
@@ -1806,6 +1807,7 @@ do_configure_win(Display *dpy, win* w){
 
   clip_changed = True;
   w->a.override_redirect = ce->override_redirect;
+  w->configure_size_changed = false;
   set_paint_ignore_region_dirty();
 }
 
@@ -1826,9 +1828,15 @@ handle_ConfigureNotify(Display *dpy, XConfigureEvent *ce) {
     }
     return;
   }
-  // save the configure event for later
+  // save the configure event for later. While on the one hand, we're only
+  // interested in the final position and size (after timeout), a change in size
+  // invalidates the pixmap, so remember any resize event.
   g_configure_needed = True;
   w->need_configure = True;
+  if (w->a.width != ce->width || w->a.height != ce->height) {
+    w->configure_size_changed = true;
+  }
+
   w->queue_configure = *ce;
 
   // w->a.override_redirect = ce->override_redirect;
