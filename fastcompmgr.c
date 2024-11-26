@@ -1178,6 +1178,11 @@ paint_all(Display *dpy, XserverRegion region) {
 
     if (w->mode != WINDOW_SOLID || HAS_FRAME_OPACITY(w)) {
       int x, y, wid, hei;
+      // 2024-11-26: Without the next two lines, the Microsoft-Teams screen-share
+      // window has a broken frame instead of a shadow, with a "startup-frozen"
+      // picture. Inspired by xcompmgr's commit 5a7d139f (2012-08-11).
+      XFixesIntersectRegion(dpy, w->border_clip, w->border_clip, w->border_size);
+      XFixesSetPictureClipRegion(dpy, root_buffer, 0, 0, w->border_clip);
 
 #if HAS_NAME_WINDOW_PIXMAP
       x = w->a.x;
