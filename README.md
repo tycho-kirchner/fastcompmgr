@@ -81,6 +81,30 @@ $ make install
 ~~~ bash
 $ fastcompmgr -o 0.4 -r 12 -c -C
 ~~~
+All options (currently fading doesn't work):
+~~~
+   -d display
+    Which display should be managed.
+   -r radius
+    The blur radius for shadows. (default 12)
+   -o opacity
+    The translucency for shadows. (default .75)
+   -l left-offset
+    The left offset for shadows. (default -15)
+   -t top-offset
+    The top offset for shadows. (default -15)
+   -m opacity
+    The opacity for menus. (default 1.0)
+   -c
+    Enabled client-side shadows on windows.
+   -C
+    Avoid drawing shadows on dock/panel windows.
+   -i opacity
+    Opacity of inactive windows. (0.1 - 1.0)
+   -e opacity
+    Opacity of window titlebars and borders. (0.1 - 1.0)
+~~~
+
 
 ## License
 

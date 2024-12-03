@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <limits.h>
 #include <math.h>
 #include <sys/poll.h>
 #include <sys/time.h>
@@ -28,6 +29,8 @@
 #include <X11/extensions/Xdamage.h>
 #include <X11/extensions/Xrender.h>
 
+#include "cm-global.h"
+#include "cm-root.h"
 #include "comp_rect.h"
 #include "ringbuffer.h"
 
@@ -59,6 +62,14 @@ typedef enum {
   WINTYPE_DND,
   NUM_WINTYPES
 } wintype;
+
+
+// Cache whether to draw a shadow or not
+typedef enum {
+  SHADOW_UNKNWON, // MUST ALWAYS STAY first, due to init optimization in add_win
+  SHADOW_YES,
+  SHADOW_NO
+} shadowtype;
 
 typedef struct _ignore {
   struct _ignore *next;
@@ -92,6 +103,7 @@ typedef struct _win {
   int shadow_height;
   unsigned int opacity;
   wintype window_type;
+  shadowtype shadow_type;
   unsigned long damage_sequence; /* sequence when damage was created */
   Bool destroyed;
   Bool paint_needed;
@@ -101,6 +113,7 @@ typedef struct _win {
   unsigned int bottom_width;
 
   Bool need_configure;
+  bool configure_size_changed;
   XConfigureEvent queue_configure;
 
   /* for drawing translucent windows */
@@ -126,10 +139,6 @@ typedef struct _fade {
 win *list;
 fade *fades;
 Display *dpy;
-int scr;
-Window root;
-Picture root_picture;
-Picture root_buffer;
 Picture black_picture;
 Picture root_tile;
 XserverRegion all_damage;
@@ -139,7 +148,6 @@ Bool clip_changed;
 #if HAS_NAME_WINDOW_PIXMAP
 Bool has_name_pixmap;
 #endif
-int root_height, root_width;
 ringBuffer_typedef(ulong, IgnoreErrRingbuf);
 IgnoreErrRingbuf ignore_ringbuf;
 IgnoreErrRingbuf* p_ignore_ringbuf = &ignore_ringbuf;
@@ -151,12 +159,6 @@ Bool synchronize;
 int composite_opcode;
 static Bool g_paint_ignore_region_is_dirty = True;
 
-/* find these once and be done with it */
-Atom atom_opacity;
-Atom atom_win_type;
-Atom atom_pixmap;
-Atom atom_wm_state;
-Atom atom_net_frame_extents;
 Atom win_type[NUM_WINTYPES];
 double win_type_opacity[NUM_WINTYPES];
 Bool win_type_shadow[NUM_WINTYPES];
@@ -182,6 +184,8 @@ conv *gaussian_map;
 
 static void
 determine_mode(Display *dpy, win *w);
+static bool
+is_gtk_frame_extent(Display *dpy, Window w);
 
 static double
 get_opacity_percent(Display *dpy, win *w);
@@ -221,16 +225,6 @@ int Gsize = -1;
 unsigned char *shadow_corner = NULL;
 unsigned char *shadow_top = NULL;
 
-static inline bool
-validate_pixmap(Display* dpy, Pixmap pxmap) {
-  if (!pxmap) return false;
-
-  Window rroot = None;
-  int rx = 0, ry = 0;
-  unsigned rwid = 0, rhei = 0, rborder = 0, rdepth = 0;
-  return XGetGeometry(dpy, pxmap, &rroot, &rx, &ry,
-        &rwid, &rhei, &rborder, &rdepth) && rwid && rhei;
-}
 
 int
 get_time_in_milliseconds() {
@@ -801,80 +795,10 @@ find_win(Display *dpy, Window id) {
   return 0;
 }
 
-static const char *background_props[] = {
-  "_XROOTPMAP_ID",
-  "_XSETROOT_ID",
-  0,
-};
-
-static Picture
-root_tile_f(Display *dpy) {
-  Picture picture;
-  Atom actual_type;
-  Pixmap pixmap;
-  int actual_format;
-  unsigned long nitems;
-  unsigned long bytes_after;
-  unsigned char *prop;
-  Bool fill;
-  XRenderPictureAttributes pa;
-  int p;
-  int res;
-
-  pixmap = None;
-
-  for (p = 0; background_props[p]; p++) {
-    prop = NULL;
-    res = XGetWindowProperty(dpy, root,
-          XInternAtom(dpy, background_props[p], False),
-          0, 4, False, AnyPropertyType, &actual_type,
-          &actual_format, &nitems, &bytes_after, &prop);
-    if (res != Success || prop == NULL ){
-      continue;
-    }
-    if(actual_type == atom_pixmap
-          && actual_format == 32 && nitems == 1) {
-      memcpy(&pixmap, prop, 4);
-    }
-    XFree(prop);
-    // In some window managers without managed desktops or also in some versions of
-    // xfce (4.18), the found pixmap has a size if zero. In this case, we'll create
-    // the pixmap ourselves (below this loop).
-    if(validate_pixmap(dpy, pixmap)){
-      fill = False;
-      break;
-    } else {
-      pixmap = None;
-    }
-  }
-
-  if (!pixmap) {
-    // fprintf(stderr, "info: no valid pixmap found from bg\n");
-    pixmap = XCreatePixmap(dpy, root, 1, 1, DefaultDepth(dpy, scr));
-    fill = True;
-  }
-
-  pa.repeat = True;
-  picture = XRenderCreatePicture(
-    dpy, pixmap, XRenderFindVisualFormat(dpy, DefaultVisual(dpy, scr)),
-    CPRepeat, &pa);
-
-  if (fill) {
-    XRenderColor  c;
-
-    c.red = c.green = c.blue = 0x8080;
-    c.alpha = 0xffff;
-    XRenderFillRectangle(
-      dpy, PictOpSrc, picture, &c, 0, 0, 1, 1);
-  }
-
-  return picture;
-}
-
 static void
 paint_root(Display *dpy) {
   if (!root_tile) {
-    root_tile = root_tile_f(dpy);
+    root_tile = root_create_tile();
   }
 
   XRenderComposite(
@@ -892,18 +816,22 @@ win_extents(Display *dpy, win *w) {
   r.width = w->a.width + w->a.border_width * 2;
   r.height = w->a.height + w->a.border_width * 2;
 
-  if (likely(w->window_type)
+  if(unlikely(w->shadow_type)==SHADOW_UNKNWON){
+    // override_redirect: looking at xlib's documentation for the "Override Redirect Flag", it becomes
+    // clear that toolkits will typically set this flag for popup windows.
+    // On the other hand, WINTYPE_NORMAL windows setting override_redirect, are likely
+    // some kind of special windows, as seen in zoom screenshare. At least in zoom's case,
+    // the shadow darkens the whole desktop. A better fix might be to render
+    // four shadow images around the window instead of one huge shadow. But first
+    // check, why dcompmgr does not have this problem.
+    // See also: https://github.com/regolith-linux/regolith-compositor-compton-glx/issues/3
+    w->shadow_type = (likely(w->window_type)
       && win_type_shadow[w->window_type] &&
-      // Looking at xlib's documentation for the "Override Redirect Flag", it becomes
-      // clear that toolkits will typically set this flag for popup windows.
-      // On the other hand, WINTYPE_NORMAL windows setting override_redirect, are likely
-      // some kind of special windows, as seen in zoom screenshare. At least in zoom's case,
-      // the shadow darkens the whole desktop. A better fix might be to render
-      // four shadow images around the window instead of one huge shadow. But first
-      // check, why dcompmgr does not have this problem.
-      // See also: https://github.com/regolith-linux/regolith-compositor-compton-glx/issues/3
-      (! w->a.override_redirect || w->window_type != WINTYPE_NORMAL)
-      ) {
+      (! w->a.override_redirect || w->window_type != WINTYPE_NORMAL) &&
+      ! is_gtk_frame_extent(dpy, w->id)) ? SHADOW_YES : SHADOW_NO;
+  }
+
+  if (w->shadow_type == SHADOW_YES) {
     XRectangle sr;
 
     w->shadow_dx = shadow_offset_x;
@@ -1098,10 +1026,10 @@ paint_all(Display *dpy, XserverRegion region) {
   if (!root_buffer) {
     Pixmap rootPixmap = XCreatePixmap(
       dpy, root, root_width, root_height,
-      DefaultDepth(dpy, scr));
+      DefaultDepth(dpy, g_screen));
 
     root_buffer = XRenderCreatePicture(dpy, rootPixmap,
-      XRenderFindVisualFormat(dpy, DefaultVisual(dpy, scr)),
+      XRenderFindVisualFormat(dpy, DefaultVisual(dpy, g_screen)),
       0, 0);
 
     XFreePixmap(dpy, rootPixmap);
@@ -1250,6 +1178,11 @@ paint_all(Display *dpy, XserverRegion region) {
 
     if (w->mode != WINDOW_SOLID || HAS_FRAME_OPACITY(w)) {
       int x, y, wid, hei;
+      // 2024-11-26: Without the next two lines, the Microsoft-Teams screen-share
+      // window has a broken frame instead of a shadow, with a "startup-frozen"
+      // picture. Inspired by xcompmgr's commit 5a7d139f (2012-08-11).
+      XFixesIntersectRegion(dpy, w->border_clip, w->border_clip, w->border_size);
+      XFixesSetPictureClipRegion(dpy, root_buffer, 0, 0, w->border_clip);
 
 #if HAS_NAME_WINDOW_PIXMAP
       x = w->a.x;
@@ -1595,6 +1528,22 @@ unmap_win(Display *dpy, Window id, Bool fade) {
     finish_unmap_win(dpy, w);
 }
 
+static bool is_gtk_frame_extent(Display *dpy, Window w){
+  Atom type;
+  int format;
+  unsigned long nitems, after;
+  unsigned char *data = NULL;
+  int result;
+
+  result = XGetWindowProperty(dpy, w, atom_gtk_frame_extents, 0, LONG_MAX,
+    false, XA_CARDINAL, &type, &format, &nitems, &after, (unsigned char **)&data);
+  if (result == Success && data!=NULL) {
+    XFree((void *)data);
+    return nitems == 4 ;
+  }
+  return false;
+}
+
 /* Get the opacity prop from window
    not found: default
    otherwise the value
@@ -1826,7 +1775,7 @@ do_configure_win(Display *dpy, win* w){
   w->need_configure = False;
   w->a.x = ce->x;
   w->a.y = ce->y;
-  if (w->a.width != ce->width || w->a.height != ce->height) {
+  if (w->configure_size_changed) {
 
 #if HAS_NAME_WINDOW_PIXMAP
     if (w->pixmap) {
@@ -1863,6 +1812,7 @@ do_configure_win(Display *dpy, win* w){
 
   clip_changed = True;
   w->a.override_redirect = ce->override_redirect;
+  w->configure_size_changed = false;
   set_paint_ignore_region_dirty();
 }
 
@@ -1883,9 +1833,15 @@ handle_ConfigureNotify(Display *dpy, XConfigureEvent *ce) {
     }
     return;
   }
-  // save the configure event for later
+  // save the configure event for later. While on the one hand, we're only
+  // interested in the final position and size (after timeout), a change in size
+  // invalidates the pixmap, so remember any resize event.
   g_configure_needed = True;
   w->need_configure = True;
+  if (w->a.width != ce->width || w->a.height != ce->height) {
+    w->configure_size_changed = true;
+  }
+
   w->queue_configure = *ce;
 
   // w->a.override_redirect = ce->override_redirect;
@@ -2206,7 +2162,7 @@ ev_window(XEvent *ev) {
 
 void
 usage(char *program) {
-  fprintf(stderr, "%s v0.3\n", program);
+  fprintf(stderr, "%s v0.5\n", program);
   fprintf(stderr, "usage: %s [options]\n", program);
 
   fprintf(stderr, "Options\n");
@@ -2262,38 +2218,48 @@ usage(char *program) {
   exit(1);
 }
 
-static void
-register_cm(int scr) {
+static Bool
+register_cm (Display *dpy)
+{
   Window w;
   Atom a;
-  char *buf;
-  int len, s;
+  static char net_wm_cm[] = "_NET_WM_CM_Sxx";
 
-  if (scr < 0) return;
+  snprintf (net_wm_cm, sizeof (net_wm_cm), "_NET_WM_CM_S%d", g_screen);
+  a = XInternAtom (dpy, net_wm_cm, False);
+  w = XGetSelectionOwner (dpy, a);
+  if (w != None) {
+    XTextProperty tp;
+    char **strs;
+    int count;
+    Atom winNameAtom = XInternAtom (dpy, "_NET_WM_NAME", False);
 
-  w = XCreateSimpleWindow(
-    dpy, RootWindow(dpy, 0),
-    0, 0, 1, 1, 0, None, None);
-
-  Xutf8SetWMProperties(
-    dpy, w, "xcompmgr", "xcompmgr",
-    NULL, 0, NULL, NULL, NULL);
-
-  len = strlen(REGISTER_PROP) + 2;
-  s = scr;
-
-  while (s >= 10) {
-    ++len;
-    s /= 10;
+    if (!XGetTextProperty (dpy, w, &tp, winNameAtom) &&
+        !XGetTextProperty (dpy, w, &tp, XA_WM_NAME))
+    {
+      fprintf (stderr,
+         "Another composite manager is already running (0x%lx)\n",
+         (unsigned long) w);
+      return False;
+    }
+    if (XmbTextPropertyToTextList (dpy, &tp, &strs, &count) == Success)
+    {
+      fprintf (stderr,
+         "Another composite manager is already running (%s)\n", strs[0]);
+      XFreeStringList (strs);
+    }
+    XFree (tp.value);
+    return False;
   }
 
-  buf = malloc(len);
-  snprintf(buf, len, REGISTER_PROP"%d", scr);
+  w = XCreateSimpleWindow (dpy, RootWindow (dpy, g_screen), 0, 0, 1, 1, 0, None,
+          None);
 
-  a = XInternAtom(dpy, buf, False);
-  free(buf);
+  Xutf8SetWMProperties (dpy, w, "fastcompmgr", "fastcompmgr", NULL, 0, NULL, NULL,
+      NULL);
 
-  XSetSelectionOwner(dpy, a, w, 0);
+  XSetSelectionOwner (dpy, a, w, 0);
+  return True;
 }
 
 static void run_configures(Display *dpy){
@@ -2360,7 +2326,6 @@ main(int argc, char **argv) {
   Window *children;
   unsigned int nchildren;
   int i;
-  XRenderPictureAttributes pa;
   XRectangle *expose_rects = 0;
   int size_expose = 0;
   int n_expose = 0;
@@ -2464,14 +2429,15 @@ main(int argc, char **argv) {
     fprintf(stderr, "Can't open display\n");
     exit(1);
   }
+  g_dpy = dpy;
 
   XSetErrorHandler(error);
   if (synchronize) {
     XSynchronize(dpy, 1);
   }
 
-  scr = DefaultScreen(dpy);
-  root = RootWindow(dpy, scr);
+  g_screen = DefaultScreen(dpy);
+  root = RootWindow(dpy, g_screen);
 
   if (!XRenderQueryExtension(dpy, &render_event, &render_error)) {
     fprintf(stderr, "No render extension\n");
@@ -2502,7 +2468,8 @@ main(int argc, char **argv) {
     exit(1);
   }
 
-  register_cm(scr);
+  if(! register_cm(dpy))
+    exit(1);
 
   /* get atoms */
   atom_opacity = XInternAtom(dpy,
@@ -2514,7 +2481,9 @@ main(int argc, char **argv) {
   atom_wm_state = XInternAtom(dpy,
     "WM_STATE", False);
   atom_net_frame_extents = XInternAtom(dpy,
-    "_NET_FRAME_EXTENTS", False),
+    "_NET_FRAME_EXTENTS", False);
+  atom_gtk_frame_extents = XInternAtom(dpy,
+    "_GTK_FRAME_EXTENTS", False);
   win_type[WINTYPE_DESKTOP] = XInternAtom(dpy,
     "_NET_WM_WINDOW_TYPE_DESKTOP", False);
   win_type[WINTYPE_DOCK] = XInternAtom(dpy,
@@ -2544,17 +2513,13 @@ main(int argc, char **argv) {
   win_type[WINTYPE_DND] = XInternAtom(dpy,
     "_NET_WM_WINDOW_TYPE_DND", False);
 
-  pa.subwindow_mode = IncludeInferiors;
-
   gaussian_map = make_gaussian_map(dpy, shadow_radius);
   presum_gaussian(gaussian_map);
 
-  root_width = DisplayWidth(dpy, scr);
-  root_height = DisplayHeight(dpy, scr);
+  if(!root_init()){
+    exit(1);
+  }
 
-  root_picture = XRenderCreatePicture(dpy, root,
-    XRenderFindVisualFormat(dpy, DefaultVisual(dpy, scr)),
-    CPSubwindowMode, &pa);
   black_picture = solid_picture(dpy, True, 1, 0, 0, 0);
 
 
@@ -2701,9 +2666,9 @@ main(int argc, char **argv) {
           }
           break;
         case PropertyNotify:
-          for (p = 0; background_props[p]; p++) {
+          for (p = 0; root_background_props[p]; p++) {
             if (ev.xproperty.atom ==
-                XInternAtom(dpy, background_props[p], False)) {
+                XInternAtom(dpy, root_background_props[p], False)) {
               if (root_tile) {
                 XClearArea(dpy, root, 0, 0, 0, 0, True);
                 XRenderFreePicture(dpy, root_tile);
@@ -2722,6 +2687,11 @@ main(int argc, char **argv) {
                 get_opacity_prop(dpy, w, (unsigned long)(OPAQUE * def)));
             }
           }
+          break;
+        case SelectionClear:
+          fprintf(stderr, "Another composite manager started and took the _NET_WM_CM_Sn "
+	          "selection. Bye.\n");
+          exit(0);
           break;
         default:
           if (likely(ev.type == damage_event + XDamageNotify)) {

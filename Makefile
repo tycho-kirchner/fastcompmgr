@@ -8,7 +8,7 @@ BIN = /usr/local/bin
 # And split the char ':' into a new line
 MANPATH = $(shell manpath | tr ':' '\n')
 
-OBJS=fastcompmgr.o comp_rect.o
+OBJS=fastcompmgr.o comp_rect.o cm-root.o cm-global.o
 
 .c.o:
 	$(CC) $(CFLAGS) $(INCS) -c $*.c
