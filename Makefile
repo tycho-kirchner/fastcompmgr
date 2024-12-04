@@ -14,13 +14,14 @@ fastcompmgr: $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $(OBJS) $(LIBS)
 
 install: fastcompmgr
-	@cp -t ${PREFIX}/bin fastcompmgr
-	@[ -d "${MANDIR}" ] \
-	  && cp -t "${MANDIR}" fastcompmgr.1
+	@mkdir -p "${PREFIX}/bin"
+	@cp -t "${PREFIX}/bin" fastcompmgr
+	@mkdir -p "${MANDIR}"
+	@cp -t "${MANDIR}" fastcompmgr.1
 
 uninstall:
-	@rm -f ${PREFIX}/fastcompmgr
-	@rm -f ${MANDIR}/fastcompmgr.1
+	@rm -f "${PREFIX}/bin/fastcompmgr"
+	@rm -f "${MANDIR}/fastcompmgr.1"
 
 clean:
 	rm -f $(OBJS) fastcompmgr
