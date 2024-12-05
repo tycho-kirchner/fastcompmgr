@@ -180,7 +180,9 @@ conv *gaussian_map;
 #ifndef DEBUG_EVENTS
 #define DEBUG_EVENTS 0
 #endif
+#ifndef MONITOR_REPAINT
 #define MONITOR_REPAINT 0
+#endif
 
 static void
 determine_mode(Display *dpy, win *w);
@@ -1041,7 +1043,7 @@ paint_all(Display *dpy, XserverRegion region) {
 #if MONITOR_REPAINT
   root_buffer = root_picture;
 #else
-  if (!root_buffer) {
+  if (unlikely(!root_buffer)) {
     Pixmap rootPixmap = XCreatePixmap(
       dpy, root, root_width, root_height,
       DefaultDepth(dpy, g_screen));
@@ -1255,13 +1257,13 @@ paint_all(Display *dpy, XserverRegion region) {
     }
   }
 
-  if (root_buffer != root_picture) {
+#if ! MONITOR_REPAINT
     XFixesSetPictureClipRegion(dpy, root_buffer, 0, 0, None);
     XRenderComposite(
       dpy, PictOpSrc, root_buffer, None,
       root_picture, 0, 0, 0, 0,
       0, 0, root_width, root_height);
-  }
+#endif // ! MONITOR_REPAINT
 }
 
 static void
