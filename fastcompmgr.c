@@ -825,10 +825,28 @@ win_extents(Display *dpy, win *w) {
     // four shadow images around the window instead of one huge shadow. But first
     // check, why dcompmgr does not have this problem.
     // See also: https://github.com/regolith-linux/regolith-compositor-compton-glx/issues/3
-    w->shadow_type = (likely(w->window_type)
+    bool shadow_yes = (likely(w->window_type)
       && win_type_shadow[w->window_type] &&
       (! w->a.override_redirect || w->window_type != WINTYPE_NORMAL) &&
-      ! is_gtk_frame_extent(dpy, w->id)) ? SHADOW_YES : SHADOW_NO;
+      ! is_gtk_frame_extent(dpy, w->id));
+    // Firefox's bookmark-dragging renders a large ugly shadow. Since these as
+    // well as Tab-popups are ARGB-windows, stay safe and only draw shadows on
+    // non-solid windows for types normal/dialog . Note that apparently Compiz
+    // does not draw shadows on any ARGB windows, so nothing unusual here. See
+    // also https://github.com/chjj/compton/issues/201
+    // Since we have the -C flag to control for shadows on panels/docks, respect
+    // this setting by below WINTYPE_DOCK (and above win_type_shadow[])
+    if (w->mode != WINDOW_SOLID ) {
+      switch(w->window_type){
+      case WINTYPE_NORMAL:
+      case WINTYPE_DIALOG:
+      case WINTYPE_DOCK:
+        shadow_yes = shadow_yes && true; break;
+      default:
+        shadow_yes = false;
+      }
+    }
+    w->shadow_type = (shadow_yes) ? SHADOW_YES : SHADOW_NO;
   }
 
   if (w->shadow_type == SHADOW_YES) {
