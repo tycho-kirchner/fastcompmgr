@@ -1172,7 +1172,7 @@ paint_all(Display *dpy, XserverRegion region) {
     XFixesSetPictureClipRegion(dpy,
       root_buffer, 0, 0, w->border_clip);
 
-    if (win_type_shadow[w->window_type]) {
+    if(w->shadow_type == SHADOW_YES) {
       XRenderComposite(
         dpy, PictOpOver, cshadow_picture, w->shadow,
         root_buffer, 0, 0, 0, 0,
