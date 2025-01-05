@@ -2217,9 +2217,9 @@ usage(char *program) {
     --shadow-green value
     Green color value of shadow (0.0 - 1.0, defaults to 0).
     --shadow-blue value
-    Blue color value of shadow (0.0 - 1.0, defaults to 0).
-    )SOMERANDOMTEXT"
+    Blue color value of shadow (0.0 - 1.0, defaults to 0).)SOMERANDOMTEXT"
   );
+  fprintf(stderr, "\n");
 
   exit(1);
 }
