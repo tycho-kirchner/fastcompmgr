@@ -31,6 +31,7 @@
 
 #include "cm-global.h"
 #include "cm-root.h"
+#include "cm-util.h"
 #include "comp_rect.h"
 #include "ringbuffer.h"
 
@@ -140,6 +141,7 @@ win *list;
 fade *fades;
 Display *dpy;
 Picture black_picture;
+Picture cshadow_picture;
 Picture root_tile;
 XserverRegion all_damage;
 XserverRegion g_xregion_tmp;
@@ -227,15 +229,6 @@ int Gsize = -1;
 unsigned char *shadow_corner = NULL;
 unsigned char *shadow_top = NULL;
 
-
-int
-get_time_in_milliseconds() {
-  struct timeval tv;
-
-  gettimeofday(&tv, NULL);
-
-  return tv.tv_sec * 1000 + tv.tv_usec / 1000;
-}
 
 fade *
 find_fade(win *w) {
@@ -1181,7 +1174,7 @@ paint_all(Display *dpy, XserverRegion region) {
 
     if (win_type_shadow[w->window_type]) {
       XRenderComposite(
-        dpy, PictOpOver, black_picture, w->shadow,
+        dpy, PictOpOver, cshadow_picture, w->shadow,
         root_buffer, 0, 0, 0, 0,
         w->a.x + w->shadow_dx, w->a.y + w->shadow_dy,
         w->shadow_width, w->shadow_height);
@@ -2219,6 +2212,12 @@ usage(char *program) {
     Opacity of window titlebars and borders. (0.1 - 1.0)
     -S
     Enable synchronous operation (for debugging).
+    --shadow-red value
+    Red color value of shadow (0.0 - 1.0, defaults to 0).
+    --shadow-green value
+    Green color value of shadow (0.0 - 1.0, defaults to 0).
+    --shadow-blue value
+    Blue color value of shadow (0.0 - 1.0, defaults to 0).
     )SOMERANDOMTEXT"
   );
 
@@ -2328,6 +2327,13 @@ check_paint(Display *dpy){
 
 int
 main(int argc, char **argv) {
+  const static struct option longopt[] = {
+    { "shadow-red", required_argument, NULL, 0 },
+    { "shadow-green", required_argument, NULL, 0 },
+    { "shadow-blue", required_argument, NULL, 0 },
+    { 0, 0, 0, 0 },
+  };
+
   XEvent ev;
   Window root_return, parent_return;
   Window *children;
@@ -2339,8 +2345,12 @@ main(int argc, char **argv) {
   struct pollfd ufd;
   int p;
   int composite_major, composite_minor;
+  double shadow_red = 0.0;
+  double shadow_green = 0.0;
+  double shadow_blue = 0.0;
   char *display = 0;
   int o;
+  int longopt_idx;
   Bool no_dock_shadow = False;
   bufferInit(ignore_ringbuf, 2048, ulong);
 
@@ -2350,8 +2360,21 @@ main(int argc, char **argv) {
     win_type_opacity[i] = 1.0;
   }
 
-  while ((o = getopt(argc, argv, "D:I:O:d:r:o:m:l:t:i:e:scnfFCaS")) != -1) {
+  while ((o = getopt_long(argc, argv, "D:I:O:d:r:o:m:l:t:i:e:scnfFCaS",
+                          longopt, &longopt_idx)) != -1) {
     switch (o) {
+       // Long options
+      case 0:
+        switch (longopt_idx) {
+          case 0: shadow_red = normalize_d(atof(optarg)); break;
+          case 1: shadow_green = normalize_d(atof(optarg)); break;
+          case 2: shadow_blue = normalize_d(atof(optarg)); break;
+          default:
+            fprintf(stderr, "Bug, unhandeled longopt_idx %d\n", longopt_idx);
+            exit(2);
+        }
+        break;
+      // Short options
       case 'd':
         display = optarg;
         break;
@@ -2529,6 +2552,12 @@ main(int argc, char **argv) {
 
   black_picture = solid_picture(dpy, True, 1, 0, 0, 0);
 
+  // Allow for user-defined shadow color:
+  if (!shadow_red && !shadow_green && !shadow_blue)
+    cshadow_picture = black_picture;
+  else
+    cshadow_picture = solid_picture(dpy, True, 1,
+        shadow_red, shadow_green, shadow_blue);
 
   all_damage = XFixesCreateRegion(dpy, 0, 0);
   all_damage_is_dirty = False;
