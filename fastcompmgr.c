@@ -2174,7 +2174,7 @@ ev_window(XEvent *ev) {
 #endif
 
 void
-usage(char *program) {
+usage(char *program, int exitcode) {
   fprintf(stderr, "%s v0.5\n", program);
   fprintf(stderr, "usage: %s [options]\n", program);
 
@@ -2221,7 +2221,7 @@ usage(char *program) {
   );
   fprintf(stderr, "\n");
 
-  exit(1);
+  exit(exitcode);
 }
 
 static Bool
@@ -2331,6 +2331,7 @@ main(int argc, char **argv) {
     { "shadow-red", required_argument, NULL, 0 },
     { "shadow-green", required_argument, NULL, 0 },
     { "shadow-blue", required_argument, NULL, 0 },
+    { "help", no_argument, NULL, 0 },
     { 0, 0, 0, 0 },
   };
 
@@ -2360,7 +2361,7 @@ main(int argc, char **argv) {
     win_type_opacity[i] = 1.0;
   }
 
-  while ((o = getopt_long(argc, argv, "D:I:O:d:r:o:m:l:t:i:e:scnfFCaS",
+  while ((o = getopt_long(argc, argv, "D:I:O:d:r:o:m:l:t:i:e:schnfFCaS",
                           longopt, &longopt_idx)) != -1) {
     switch (o) {
        // Long options
@@ -2369,6 +2370,7 @@ main(int argc, char **argv) {
           case 0: shadow_red = normalize_d(atof(optarg)); break;
           case 1: shadow_green = normalize_d(atof(optarg)); break;
           case 2: shadow_blue = normalize_d(atof(optarg)); break;
+          case 3: usage(argv[0], 0); break;
           default:
             fprintf(stderr, "Bug, unhandeled longopt_idx %d\n", longopt_idx);
             exit(2);
@@ -2402,6 +2404,7 @@ main(int argc, char **argv) {
         }
         win_type_shadow[WINTYPE_DESKTOP] = False;
         break;
+      case 'h': usage(argv[0], 0); break;
       case 'C':
         no_dock_shadow = True;
         break;
@@ -2445,7 +2448,7 @@ main(int argc, char **argv) {
           "-n, -a, and -s have been removed.\n");
         break;
       default:
-        usage(argv[0]);
+        usage(argv[0], 1);
         break;
     }
   }
