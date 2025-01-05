@@ -811,7 +811,7 @@ win_extents(Display *dpy, win *w) {
   r.width = w->a.width + w->a.border_width * 2;
   r.height = w->a.height + w->a.border_width * 2;
 
-  if(unlikely(w->shadow_type)==SHADOW_UNKNWON){
+  if(unlikely(w->shadow_type == SHADOW_UNKNWON)){
     // override_redirect: looking at xlib's documentation for the "Override Redirect Flag", it becomes
     // clear that toolkits will typically set this flag for popup windows.
     // On the other hand, WINTYPE_NORMAL windows setting override_redirect, are likely
