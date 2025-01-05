@@ -103,6 +103,13 @@ All options (currently fading doesn't work):
     Opacity of inactive windows. (0.1 - 1.0)
    -e opacity
     Opacity of window titlebars and borders. (0.1 - 1.0)
+    --shadow-red value
+    Red color value of shadow (0.0 - 1.0, defaults to 0).
+    --shadow-green value
+    Green color value of shadow (0.0 - 1.0, defaults to 0).
+    --shadow-blue value
+    Blue color value of shadow (0.0 - 1.0, defaults to 0).
+
 ~~~
 
 
