@@ -2185,55 +2185,42 @@ usage(char *program) {
   fprintf(stderr, "%s v0.5\n", program);
   fprintf(stderr, "usage: %s [options]\n", program);
 
-  fprintf(stderr, "Options\n");
   fprintf(stderr,
-    "   -d display\n    "
-    "Which display should be managed.\n");
-  fprintf(stderr,
-    "   -r radius\n    "
-    "The blur radius for shadows. (default 12)\n");
-  fprintf(stderr,
-    "   -o opacity\n    "
-    "The translucency for shadows. (default .75)\n");
-  fprintf(stderr,
-    "   -l left-offset\n    "
-    "The left offset for shadows. (default -15)\n");
-  fprintf(stderr,
-   "   -t top-offset\n    "
-   "The top offset for shadows. (default -15)\n");
-  fprintf(stderr,
-    "   -I fade-in-step\n    "
-    "Opacity change between steps while fading in. (default 0.028)\n");
-  fprintf(stderr,
-    "   -O fade-out-step\n    "
-    "Opacity change between steps while fading out. (default 0.03)\n");
-  fprintf(stderr,
-    "   -D fade-delta-time\n    "
-    "The time between steps in a fade in milliseconds. (default 10)\n");
-  fprintf(stderr,
-    "   -m opacity\n    "
-    "The opacity for menus. (default 1.0)\n");
-  fprintf(stderr,
-    "   -c\n    "
-    "Enabled client-side shadows on windows.\n");
-  fprintf(stderr,
-    "   -C\n    "
-    "Avoid drawing shadows on dock/panel windows.\n");
-  fprintf(stderr,
-    "   -f\n    "
-    "Fade windows in/out when opening/closing.\n");
-  fprintf(stderr,
-    "   -F\n    "
-    "Fade windows during opacity changes.\n");
-  fprintf(stderr,
-    "   -i opacity\n    "
-    "Opacity of inactive windows. (0.1 - 1.0)\n");
-  fprintf(stderr,
-    "   -e opacity\n    "
-    "Opacity of window titlebars and borders. (0.1 - 1.0)\n");
-  fprintf(stderr,
-    "   -S\n    "
-    "Enable synchronous operation (for debugging).\n");
+      R"SOMERANDOMTEXT(Options
+    -d display
+    Which display should be managed
+    -r radius
+    The blur radius for shadows. (default 12)
+    -o opacity
+    The translucency for shadows. (default .75)
+    -l left-offset
+    The left offset for shadows. (default -15)
+    -t top-offset
+    The top offset for shadows. (default -15)
+    -I fade-in-step
+    Opacity change between steps while fading in. (default 0.028)
+    -O fade-out-step
+    Opacity change between steps while fading out. (default 0.03)
+    -D fade-delta-time
+    The time between steps in a fade in milliseconds. (default 10)
+    -m opacity
+    The opacity for menus. (default 1.0)
+    -c
+    Enabled client-side shadows on windows.
+    -C
+    Avoid drawing shadows on dock/panel windows.
+    -f
+    Fade windows in/out when opening/closing.
+    -F
+    Fade windows during opacity changes.
+    -i opacity
+    Opacity of inactive windows. (0.1 - 1.0)
+    -e opacity
+    Opacity of window titlebars and borders. (0.1 - 1.0)
+    -S
+    Enable synchronous operation (for debugging).
+    )SOMERANDOMTEXT"
+  );
 
   exit(1);
 }
