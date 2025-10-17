@@ -32,95 +32,18 @@
 #include "cm-global.h"
 #include "cm-root.h"
 #include "cm-util.h"
+#include "cm-window.h"
 #include "comp_rect.h"
 #include "ringbuffer.h"
 
 #define likely(x)       __builtin_expect(!!(x), 1)
 #define unlikely(x)     __builtin_expect(!!(x), 0)
 
-
-#if COMPOSITE_MAJOR > 0 || COMPOSITE_MINOR >= 2
-#define HAS_NAME_WINDOW_PIXMAP 1
-#endif
-
-#define CAN_DO_USABLE 0
-
-typedef enum {
-  WINTYPE_UNKNOWN, // MUST ALWAYS STAY first, due to init optimization in add_win
-  WINTYPE_DESKTOP,
-  WINTYPE_DOCK,
-  WINTYPE_TOOLBAR,
-  WINTYPE_MENU,
-  WINTYPE_UTILITY,
-  WINTYPE_SPLASH,
-  WINTYPE_DIALOG,
-  WINTYPE_NORMAL,
-  WINTYPE_DROPDOWN_MENU,
-  WINTYPE_POPUP_MENU,
-  WINTYPE_TOOLTIP,
-  WINTYPE_NOTIFY,
-  WINTYPE_COMBO,
-  WINTYPE_DND,
-  NUM_WINTYPES
-} wintype;
-
-
-// Cache whether to draw a shadow or not
-typedef enum {
-  SHADOW_UNKNWON, // MUST ALWAYS STAY first, due to init optimization in add_win
-  SHADOW_YES,
-  SHADOW_NO
-} shadowtype;
-
 typedef struct _ignore {
   struct _ignore *next;
   unsigned long sequence;
 } ignore;
 
-typedef struct _win {
-  struct _win *next;
-  Window id;
-#if HAS_NAME_WINDOW_PIXMAP
-  Pixmap pixmap;
-#endif
-  XWindowAttributes a;
-#if CAN_DO_USABLE
-  Bool usable; /* mapped and all damaged at one point */
-  XRectangle damage_bounds; /* bounds of damage */
-#endif
-  int mode;
-  int damaged;
-  Damage damage;
-  Picture picture;
-  Picture alpha_pict;
-  Picture alpha_border_pict;
-  Picture shadow_pict;
-  XserverRegion border_size;
-  XserverRegion extents;
-  Picture shadow;
-  int shadow_dx;
-  int shadow_dy;
-  int shadow_width;
-  int shadow_height;
-  unsigned int opacity;
-  wintype window_type;
-  shadowtype shadow_type;
-  unsigned long damage_sequence; /* sequence when damage was created */
-  Bool destroyed;
-  Bool paint_needed;
-  unsigned int left_width;
-  unsigned int right_width;
-  unsigned int top_width;
-  unsigned int bottom_width;
-
-  Bool need_configure;
-  bool configure_size_changed;
-  XConfigureEvent queue_configure;
-
-  /* for drawing translucent windows */
-  XserverRegion border_clip;
-  struct _win *prev_trans;
-} win;
 
 typedef struct _conv {
   int size;
@@ -137,7 +60,6 @@ typedef struct _fade {
   Display *dpy;
 } fade;
 
-win *list;
 fade *fades;
 Display *dpy;
 Picture black_picture;
@@ -778,17 +700,7 @@ should_ignore(Display *dpy, unsigned long sequence) {
   return buf_seq == sequence;
 }
 
-static win *
-find_win(Display *dpy, Window id) {
-  win *w;
 
-  for (w = list; w; w = w->next) {
-    if (w->id == id && !w->destroyed)
-      return w;
-  }
-
-  return 0;
-}
 
 static void
 paint_root(Display *dpy) {
@@ -1425,7 +1337,7 @@ handle_ConfigureNotify(Display *dpy, XConfigureEvent *ce);
 static void
 map_win(Display *dpy, Window id,
         unsigned long sequence, Bool fade) {
-  win *w = find_win(dpy, id);
+  win *w = find_win(id);
 
   if (unlikely(!w)) return;
 
@@ -1520,7 +1432,7 @@ unmap_callback(Display *dpy, win *w) {
 
 static void
 unmap_win(Display *dpy, Window id, Bool fade) {
-  win *w = find_win(dpy, id);
+  win *w = find_win(id);
 
   if (!w) return;
 
@@ -1833,7 +1745,7 @@ Bool g_configure_needed = False;
 
 static void
 handle_ConfigureNotify(Display *dpy, XConfigureEvent *ce) {
-  win *w = find_win(dpy, ce->window);
+  win *w = find_win(ce->window);
 
   if (unlikely(!w)) {
     if (ce->window == root) {
@@ -1863,7 +1775,7 @@ handle_ConfigureNotify(Display *dpy, XConfigureEvent *ce) {
 
 static void
 circulate_win(Display *dpy, XCirculateEvent *ce) {
-  win *w = find_win(dpy, ce->window);
+  win *w = find_win(ce->window);
   Window new_above;
 
   if (!w) return;
@@ -1939,7 +1851,7 @@ destroy_callback(Display *dpy, win *w) {
 
 static void
 destroy_win(Display *dpy, Window id, Bool fade) {
-  win *w = find_win(dpy, id);
+  win *w = find_win(id);
 
   if (w) w->destroyed = True;
 
@@ -1979,7 +1891,7 @@ dump_wins(void) {
 
 static void
 damage_win(Display *dpy, XDamageNotifyEvent *de) {
-  win *w = find_win(dpy, de->drawable);
+  win *w = find_win(de->drawable);
 
   if (unlikely(!w)) return;
 
@@ -2633,7 +2545,7 @@ main(int argc, char **argv) {
           // the right kind of FocusOut event
           if (ev.xfocus.detail == NotifyPointer) break;
 
-          win *fw = find_win(dpy, ev.xfocus.window);
+          win *fw = find_win(ev.xfocus.window);
           if (IS_NORMAL_WIN(fw)) {
             set_opacity(dpy, fw, OPAQUE);
           }
@@ -2648,7 +2560,7 @@ main(int argc, char **argv) {
           if (ev.xfocus.mode != NotifyGrab
               && ev.xfocus.detail == NotifyVirtual) break;
 
-          win *fw = find_win(dpy, ev.xfocus.window);
+          win *fw = find_win(ev.xfocus.window);
           if (IS_NORMAL_WIN(fw)) {
             set_opacity(dpy, fw, INACTIVE_OPACITY);
           }
@@ -2719,7 +2631,7 @@ main(int argc, char **argv) {
           /* check if Trans property was changed */
           if (ev.xproperty.atom == atom_opacity) {
             /* reset mode and redraw window */
-            win *w = find_win(dpy, ev.xproperty.window);
+            win *w = find_win(ev.xproperty.window);
             if (w) {
               double def = win_type_opacity[w->window_type];
               set_opacity(dpy, w,
