@@ -30,14 +30,13 @@
 #include <X11/extensions/Xrender.h>
 
 #include "cm-global.h"
+#include "cm-event.h"
 #include "cm-root.h"
 #include "cm-util.h"
 #include "cm-window.h"
 #include "comp_rect.h"
 #include "ringbuffer.h"
 
-#define likely(x)       __builtin_expect(!!(x), 1)
-#define unlikely(x)     __builtin_expect(!!(x), 0)
 
 typedef struct _ignore {
   struct _ignore *next;
@@ -72,9 +71,6 @@ Bool clip_changed;
 #if HAS_NAME_WINDOW_PIXMAP
 Bool has_name_pixmap;
 #endif
-ringBuffer_typedef(ulong, IgnoreErrRingbuf);
-IgnoreErrRingbuf ignore_ringbuf;
-IgnoreErrRingbuf* p_ignore_ringbuf = &ignore_ringbuf;
 int xfixes_event, xfixes_error;
 int damage_event, damage_error;
 int composite_event, composite_error;
@@ -669,37 +665,6 @@ solid_picture(Display *dpy, Bool argb, double a,
 
   return picture;
 }
-
-void
-discard_ignore(Display *dpy, unsigned long sequence) {
-  while(! isBufferEmpty(p_ignore_ringbuf)){
-    ulong buf_seq;
-    buf_seq = bufferReadPeek(p_ignore_ringbuf);
-    if ((long) (sequence - buf_seq) > 0) {
-      bufferReadSkip(p_ignore_ringbuf);
-    } else {
-      break;
-    }
-  }
-}
-
-void
-set_ignore(Display *dpy, unsigned long sequence) {
-  if(unlikely(isBufferFull(p_ignore_ringbuf))) {
-    bufferIncrease(p_ignore_ringbuf, p_ignore_ringbuf->size*2);
-  }
-  bufferWrite(p_ignore_ringbuf, sequence);
-}
-
-int
-should_ignore(Display *dpy, unsigned long sequence) {
-  ulong buf_seq;
-  discard_ignore(dpy, sequence);
-  if(isBufferEmpty(p_ignore_ringbuf)) return False;
-  buf_seq = bufferReadPeek(p_ignore_ringbuf);
-  return buf_seq == sequence;
-}
-
 
 
 static void
@@ -2265,7 +2230,9 @@ main(int argc, char **argv) {
   int o;
   int longopt_idx;
   Bool no_dock_shadow = False;
-  bufferInit(ignore_ringbuf, 2048, ulong);
+  if(!event_init()){
+    exit(1);
+  }
 
   for (i = 0; i < NUM_WINTYPES; ++i) {
     win_type_fade[i] = False;
