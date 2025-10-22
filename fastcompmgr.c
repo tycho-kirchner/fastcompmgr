@@ -991,7 +991,7 @@ paint_all(Display *dpy, XserverRegion region) {
 
     // Note that undamaged windows should not contribute to the ignore
     // region. Otherwise VBoxManager makes other windows disappear during startup.
-    if(unlikely(ignore_region_is_dirty)){
+    if(unlikely(ignore_region_is_dirty || clip_changed)){
       // maybe_todo: pass only clipped rects, actually visible on screen.
       // Now we may choose the ignore region from a big window which
       // resides largely outside the screen.
