@@ -808,20 +808,10 @@ find_client_win(Display *dpy, Window win) {
   Window *children;
   unsigned int nchildren;
   unsigned int i;
-  Atom type = None;
-  int format;
-  unsigned long nitems, after;
-  unsigned char *data = NULL;
   Window client = 0;
-  int res;
 
-  res = XGetWindowProperty(
-    dpy, win, atom_wm_state, 0, 0, False,
-    AnyPropertyType, &type, &format, &nitems,
-    &after, &data);
-  if (likely(res == Success && data != NULL )) {
-      XFree(data);
-      if (likely(type)) return win;
+  if(win_is_client(win)){
+    return win;
   }
 
   if (!XQueryTree(dpy, win, &root,
@@ -840,7 +830,7 @@ find_client_win(Display *dpy, Window win) {
 }
 
 static void
-get_frame_extents(Display *dpy, Window w,
+get_frame_extents(win* w,
                   unsigned int *left,
                   unsigned int *right,
                   unsigned int *top,
@@ -851,17 +841,37 @@ get_frame_extents(Display *dpy, Window w,
   unsigned long nitems, after;
   unsigned char *data = NULL;
   int result;
+  Window client_window = 0;
 
   *left = 0;
   *right = 0;
   *top = 0;
   *bottom = 0;
 
-  w = find_client_win(dpy, w);
-  if (!w) return;
+  client_window = find_client_win(dpy, w->id);
+  if (!client_window) {
+    w->hidden_type = win_state_is_hidden( w->id) ? HIDDEN_YES : HIDDEN_NO;
+    return;
+  }
+
+  if(w->id != client_window){
+    // i3 in tabbed mode changes the _NET_WM_STATE attribute from
+    // _NET_WM_STATE_FOCUSED to _NET_WM_STATE_HIDDEN when switching tabs. Further, i3
+    // spans a "container" window around the client, while only the client has the
+    // _NET_WM_STATE attribute set. Thus, although fastcompmgr normally only listens to
+    // events of "container" windows, in this case, we also have to register for
+    // "Property" changes of the client window:
+    win_register_client_events(client_window);
+  }
+  w->hidden_type = win_state_is_hidden(client_window) ? HIDDEN_YES : HIDDEN_NO;
+
+  // FIXME: determine the active window on fastcompmgr startup and set opacity accordingly
+  // if(win_has_focus(client_window)){
+  //   fprintf(stderr, "YES, HAS FOCUS: 0x%lx\n", client_window);
+  // }
 
   result = XGetWindowProperty(
-    dpy, w, atom_net_frame_extents,
+    dpy, client_window, atom_net_frame_extents,
     0L, 4L, False, AnyPropertyType,
     &type, &format, &nitems, &after,
     (unsigned char **)&data);
@@ -889,6 +899,32 @@ win_paint_needed(win* w, CompRect* ignore_reg){
         || w->a.x >= root_width || w->a.y >= root_height)) {
       return False;
     }
+
+    switch (w->hidden_type) {
+    case HIDDEN_UNKNOWN: {
+      fprintf(stderr, "fastcompmgr warning: hidden state still unknown in "
+                      "win_paint_needed: 0x%lx\n", w->id);
+      Window client_window = find_client_win(dpy, w->id);
+      if (!client_window) {
+        // We already tried to find a client on add_win - give up for now.
+        w->hidden_type = HIDDEN_IGNORE;
+        break;
+      }
+
+      win_register_client_events(client_window);
+      if(win_state_is_hidden(client_window)){
+        w->hidden_type = HIDDEN_YES;
+        return false;
+      } else {
+        w->hidden_type = HIDDEN_NO;
+      }
+      break;
+    }
+    case HIDDEN_YES: return false;
+    case HIDDEN_NO: break;
+    case HIDDEN_IGNORE: break;
+    }
+
     // Unmapped, destroyed or translucent windows must not contribute to the ignore region.
     // Same applies to override_redirect windows, which some screenshooter apps employ
     // (s. e.g. xfce4-screenshooter
@@ -1144,6 +1180,30 @@ add_damage(Display *dpy, XserverRegion damage) {
     XFixesCopyRegion(dpy, all_damage, damage);
     all_damage_is_dirty = True;
   }
+}
+
+
+static void
+add_damage_if_hidden_changed(Window window, bool is_reparent_event) {
+  win *w = find_win_any_parent(window);
+  if(unlikely(!w)){
+    return;
+  }
+  if(is_reparent_event){
+    win_register_client_events(window);
+  }
+  hiddentype hidden_type = win_state_is_hidden(window) ? HIDDEN_YES : HIDDEN_NO;
+  // _NET_WM_STATE may change without altering _NET_WM_STATE_HIDDEN, so
+  // check, if there's need for action.
+  if(w->hidden_type == hidden_type){
+    return;
+  }
+  w->hidden_type = hidden_type;
+  if(w->extents){
+    add_damage(dpy, w->extents);
+  }
+  clip_changed = True;
+  set_paint_ignore_region_dirty();
 }
 
 static void
@@ -1539,6 +1599,16 @@ set_opacity(Display *dpy, win *w, unsigned long opacity) {
   set_paint_ignore_region_dirty();
 }
 
+
+static uint
+win_suggest_opacity(win* w, bool* is_userdefined){
+  uint default_op = (uint)(win_type_opacity[w->window_type]*OPAQUE);
+  uint actual_opacity = get_opacity_prop(g_dpy, w, default_op);
+  *is_userdefined = actual_opacity != default_op;
+  return actual_opacity;
+}
+
+
 static void
 add_win(Display *dpy, Window id, Window prev) {
   win *new = calloc(1, sizeof(win));
@@ -1606,7 +1676,7 @@ add_win(Display *dpy, Window id, Window prev) {
   new->opacity = OPAQUE;
 
   new->border_clip = None;
-  get_frame_extents(dpy, id,
+  get_frame_extents(new,
     &new->left_width, &new->right_width,
     &new->top_width, &new->bottom_width);
 
@@ -1615,9 +1685,7 @@ add_win(Display *dpy, Window id, Window prev) {
 
   if (new->a.map_state == IsViewable) {
     new->window_type = determine_wintype(dpy, id, id);
-    if (inactive_opacity && IS_NORMAL_WIN(new)) {
-      new->opacity = INACTIVE_OPACITY;
-    }
+    new->opacity = win_suggest_opacity(new, &new->userdefined_opacity);
     map_win(dpy, id, new->damage_sequence - 1, True);
   }
 }
@@ -2396,6 +2464,14 @@ main(int argc, char **argv) {
     "_NET_FRAME_EXTENTS", False);
   atom_gtk_frame_extents = XInternAtom(dpy,
     "_GTK_FRAME_EXTENTS", False);
+  atom_net_wm_state = XInternAtom(dpy,
+    "_NET_WM_STATE", False);
+  atom_net_wm_state_hidden = XInternAtom (dpy,
+    "_NET_WM_STATE_HIDDEN", False);
+  atom_net_wm_state_focused = XInternAtom (dpy,
+    "_NET_WM_STATE_FOCUSED", False);
+  atom_net_active_window = XInternAtom (dpy,
+    "_NET_ACTIVE_WINDOW", False);
   win_type[WINTYPE_DESKTOP] = XInternAtom(dpy,
     "_NET_WM_WINDOW_TYPE_DESKTOP", False);
   win_type[WINTYPE_DOCK] = XInternAtom(dpy,
@@ -2513,7 +2589,7 @@ main(int argc, char **argv) {
           if (ev.xfocus.detail == NotifyPointer) break;
 
           win *fw = find_win(ev.xfocus.window);
-          if (IS_NORMAL_WIN(fw)) {
+          if (IS_NORMAL_WIN(fw) && ! fw->userdefined_opacity) {
             set_opacity(dpy, fw, OPAQUE);
           }
           break;
@@ -2528,7 +2604,7 @@ main(int argc, char **argv) {
               && ev.xfocus.detail == NotifyVirtual) break;
 
           win *fw = find_win(ev.xfocus.window);
-          if (IS_NORMAL_WIN(fw)) {
+          if (IS_NORMAL_WIN(fw) && ! fw->userdefined_opacity) {
             set_opacity(dpy, fw, INACTIVE_OPACITY);
           }
           break;
@@ -2550,9 +2626,21 @@ main(int argc, char **argv) {
           unmap_win(dpy, ev.xunmap.window, True);
           break;
         case ReparentNotify:
+          // Reparent for instance occurs, when the window manager restarts. In the
+          // process, events we registered for previously are lost. Events for toplevel
+          // windows, as well as PropertyChange events for non-toplevel clients are
+          // re-registered in add_win. However, *afterwards* the client may be reparented
+          // *again*, from root to its corresponding toplevel window. Thus, we have to
+          // register client events again!
+          // Note that currently we do NOT check for "stale" window states. Possibly,
+          // a hidden window where the client is reparented may remain hidden.
+          // I did not see this in pracice though, since we take the _NET_WM_STATE_HIDDEN
+          // from the client window and the client *should* be tied to its toplevel window.
           if (ev.xreparent.parent == root) {
             add_win(dpy, ev.xreparent.window, 0);
           } else {
+            add_damage_if_hidden_changed(ev.xreparent.window, true);
+            // FIXME: we only manage toplevel windows, so does this EVER fire?
             destroy_win(dpy, ev.xreparent.window, True);
           }
           break;
@@ -2595,15 +2683,20 @@ main(int argc, char **argv) {
               }
             }
           }
+          // if (ev.xproperty.atom == atom_net_active_window) {
+          //   fprintf(stderr, "active win changed\n");
+          // }
+
           /* check if Trans property was changed */
           if (ev.xproperty.atom == atom_opacity) {
             /* reset mode and redraw window */
             win *w = find_win(ev.xproperty.window);
             if (w) {
-              double def = win_type_opacity[w->window_type];
-              set_opacity(dpy, w,
-                get_opacity_prop(dpy, w, (unsigned long)(OPAQUE * def)));
+              uint opacity = win_suggest_opacity(w, &w->userdefined_opacity);
+              set_opacity(dpy, w, opacity);
             }
+          } else if (ev.xproperty.atom == atom_net_wm_state) {
+            add_damage_if_hidden_changed(ev.xproperty.window, false);
           }
           break;
         case SelectionClear:

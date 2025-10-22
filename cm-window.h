@@ -42,6 +42,15 @@ typedef enum {
 } shadowtype;
 
 
+// _NET_WM_STATE is _NET_WM_STATE_HIDDEN (and not _FOCUSED)
+typedef enum {
+  HIDDEN_UNKNOWN, // MUST ALWAYS STAY first, due to init optimization in add_win
+  HIDDEN_YES,
+  HIDDEN_NO,
+  HIDDEN_IGNORE // Don't attempt to look up client state unless there's a good reason
+} hiddentype;
+
+
 typedef struct _win {
   struct _win *next;
   Window id;
@@ -68,6 +77,8 @@ typedef struct _win {
   int shadow_width;
   int shadow_height;
   unsigned int opacity;
+  bool userdefined_opacity; // Do not set inactive opacity, if the client requests a custom
+  hiddentype hidden_type;
   wintype window_type;
   shadowtype shadow_type;
   unsigned long damage_sequence; /* sequence when damage was created */
@@ -91,4 +102,8 @@ typedef struct _win {
 extern win *list;
 
 win* find_win(Window id);
+win* find_win_any_parent(Window w);
 
+bool win_state_is_hidden(Window window);
+bool win_is_client(Window window);
+void win_register_client_events(Window window);
