@@ -22,3 +22,4 @@ Steps to reproduce the behavior:
 **Additional context**
 - does the bug happen without compositor?
 - does the bug happen using xcompmgr/compton/picom?
+- **If at all possible, please post screenshots illustrating the problem**.
