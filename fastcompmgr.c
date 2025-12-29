@@ -30,97 +30,19 @@
 #include <X11/extensions/Xrender.h>
 
 #include "cm-global.h"
+#include "cm-event.h"
 #include "cm-root.h"
 #include "cm-util.h"
+#include "cm-window.h"
 #include "comp_rect.h"
 #include "ringbuffer.h"
 
-#define likely(x)       __builtin_expect(!!(x), 1)
-#define unlikely(x)     __builtin_expect(!!(x), 0)
-
-
-#if COMPOSITE_MAJOR > 0 || COMPOSITE_MINOR >= 2
-#define HAS_NAME_WINDOW_PIXMAP 1
-#endif
-
-#define CAN_DO_USABLE 0
-
-typedef enum {
-  WINTYPE_UNKNOWN, // MUST ALWAYS STAY first, due to init optimization in add_win
-  WINTYPE_DESKTOP,
-  WINTYPE_DOCK,
-  WINTYPE_TOOLBAR,
-  WINTYPE_MENU,
-  WINTYPE_UTILITY,
-  WINTYPE_SPLASH,
-  WINTYPE_DIALOG,
-  WINTYPE_NORMAL,
-  WINTYPE_DROPDOWN_MENU,
-  WINTYPE_POPUP_MENU,
-  WINTYPE_TOOLTIP,
-  WINTYPE_NOTIFY,
-  WINTYPE_COMBO,
-  WINTYPE_DND,
-  NUM_WINTYPES
-} wintype;
-
-
-// Cache whether to draw a shadow or not
-typedef enum {
-  SHADOW_UNKNWON, // MUST ALWAYS STAY first, due to init optimization in add_win
-  SHADOW_YES,
-  SHADOW_NO
-} shadowtype;
 
 typedef struct _ignore {
   struct _ignore *next;
   unsigned long sequence;
 } ignore;
 
-typedef struct _win {
-  struct _win *next;
-  Window id;
-#if HAS_NAME_WINDOW_PIXMAP
-  Pixmap pixmap;
-#endif
-  XWindowAttributes a;
-#if CAN_DO_USABLE
-  Bool usable; /* mapped and all damaged at one point */
-  XRectangle damage_bounds; /* bounds of damage */
-#endif
-  int mode;
-  int damaged;
-  Damage damage;
-  Picture picture;
-  Picture alpha_pict;
-  Picture alpha_border_pict;
-  Picture shadow_pict;
-  XserverRegion border_size;
-  XserverRegion extents;
-  Picture shadow;
-  int shadow_dx;
-  int shadow_dy;
-  int shadow_width;
-  int shadow_height;
-  unsigned int opacity;
-  wintype window_type;
-  shadowtype shadow_type;
-  unsigned long damage_sequence; /* sequence when damage was created */
-  Bool destroyed;
-  Bool paint_needed;
-  unsigned int left_width;
-  unsigned int right_width;
-  unsigned int top_width;
-  unsigned int bottom_width;
-
-  Bool need_configure;
-  bool configure_size_changed;
-  XConfigureEvent queue_configure;
-
-  /* for drawing translucent windows */
-  XserverRegion border_clip;
-  struct _win *prev_trans;
-} win;
 
 typedef struct _conv {
   int size;
@@ -137,7 +59,6 @@ typedef struct _fade {
   Display *dpy;
 } fade;
 
-win *list;
 fade *fades;
 Display *dpy;
 Picture black_picture;
@@ -150,9 +71,6 @@ Bool clip_changed;
 #if HAS_NAME_WINDOW_PIXMAP
 Bool has_name_pixmap;
 #endif
-ringBuffer_typedef(ulong, IgnoreErrRingbuf);
-IgnoreErrRingbuf ignore_ringbuf;
-IgnoreErrRingbuf* p_ignore_ringbuf = &ignore_ringbuf;
 int xfixes_event, xfixes_error;
 int damage_event, damage_error;
 int composite_event, composite_error;
@@ -748,47 +666,6 @@ solid_picture(Display *dpy, Bool argb, double a,
   return picture;
 }
 
-void
-discard_ignore(Display *dpy, unsigned long sequence) {
-  while(! isBufferEmpty(p_ignore_ringbuf)){
-    ulong buf_seq;
-    buf_seq = bufferReadPeek(p_ignore_ringbuf);
-    if ((long) (sequence - buf_seq) > 0) {
-      bufferReadSkip(p_ignore_ringbuf);
-    } else {
-      break;
-    }
-  }
-}
-
-void
-set_ignore(Display *dpy, unsigned long sequence) {
-  if(unlikely(isBufferFull(p_ignore_ringbuf))) {
-    bufferIncrease(p_ignore_ringbuf, p_ignore_ringbuf->size*2);
-  }
-  bufferWrite(p_ignore_ringbuf, sequence);
-}
-
-int
-should_ignore(Display *dpy, unsigned long sequence) {
-  ulong buf_seq;
-  discard_ignore(dpy, sequence);
-  if(isBufferEmpty(p_ignore_ringbuf)) return False;
-  buf_seq = bufferReadPeek(p_ignore_ringbuf);
-  return buf_seq == sequence;
-}
-
-static win *
-find_win(Display *dpy, Window id) {
-  win *w;
-
-  for (w = list; w; w = w->next) {
-    if (w->id == id && !w->destroyed)
-      return w;
-  }
-
-  return 0;
-}
 
 static void
 paint_root(Display *dpy) {
@@ -931,20 +808,10 @@ find_client_win(Display *dpy, Window win) {
   Window *children;
   unsigned int nchildren;
   unsigned int i;
-  Atom type = None;
-  int format;
-  unsigned long nitems, after;
-  unsigned char *data = NULL;
   Window client = 0;
-  int res;
 
-  res = XGetWindowProperty(
-    dpy, win, atom_wm_state, 0, 0, False,
-    AnyPropertyType, &type, &format, &nitems,
-    &after, &data);
-  if (likely(res == Success && data != NULL )) {
-      XFree(data);
-      if (likely(type)) return win;
+  if(win_is_client(win)){
+    return win;
   }
 
   if (!XQueryTree(dpy, win, &root,
@@ -963,7 +830,7 @@ find_client_win(Display *dpy, Window win) {
 }
 
 static void
-get_frame_extents(Display *dpy, Window w,
+get_frame_extents(win* w,
                   unsigned int *left,
                   unsigned int *right,
                   unsigned int *top,
@@ -974,17 +841,37 @@ get_frame_extents(Display *dpy, Window w,
   unsigned long nitems, after;
   unsigned char *data = NULL;
   int result;
+  Window client_window = 0;
 
   *left = 0;
   *right = 0;
   *top = 0;
   *bottom = 0;
 
-  w = find_client_win(dpy, w);
-  if (!w) return;
+  client_window = find_client_win(dpy, w->id);
+  if (!client_window) {
+    w->hidden_type = win_state_is_hidden( w->id) ? HIDDEN_YES : HIDDEN_NO;
+    return;
+  }
+
+  if(w->id != client_window){
+    // i3 in tabbed mode changes the _NET_WM_STATE attribute from
+    // _NET_WM_STATE_FOCUSED to _NET_WM_STATE_HIDDEN when switching tabs. Further, i3
+    // spans a "container" window around the client, while only the client has the
+    // _NET_WM_STATE attribute set. Thus, although fastcompmgr normally only listens to
+    // events of "container" windows, in this case, we also have to register for
+    // "Property" changes of the client window:
+    win_register_client_events(client_window);
+  }
+  w->hidden_type = win_state_is_hidden(client_window) ? HIDDEN_YES : HIDDEN_NO;
+
+  // FIXME: determine the active window on fastcompmgr startup and set opacity accordingly
+  // if(win_has_focus(client_window)){
+  //   fprintf(stderr, "YES, HAS FOCUS: 0x%lx\n", client_window);
+  // }
 
   result = XGetWindowProperty(
-    dpy, w, atom_net_frame_extents,
+    dpy, client_window, atom_net_frame_extents,
     0L, 4L, False, AnyPropertyType,
     &type, &format, &nitems, &after,
     (unsigned char **)&data);
@@ -1012,6 +899,32 @@ win_paint_needed(win* w, CompRect* ignore_reg){
         || w->a.x >= root_width || w->a.y >= root_height)) {
       return False;
     }
+
+    switch (w->hidden_type) {
+    case HIDDEN_UNKNOWN: {
+      fprintf(stderr, "fastcompmgr warning: hidden state still unknown in "
+                      "win_paint_needed: 0x%lx\n", w->id);
+      Window client_window = find_client_win(dpy, w->id);
+      if (!client_window) {
+        // We already tried to find a client on add_win - give up for now.
+        w->hidden_type = HIDDEN_IGNORE;
+        break;
+      }
+
+      win_register_client_events(client_window);
+      if(win_state_is_hidden(client_window)){
+        w->hidden_type = HIDDEN_YES;
+        return false;
+      } else {
+        w->hidden_type = HIDDEN_NO;
+      }
+      break;
+    }
+    case HIDDEN_YES: return false;
+    case HIDDEN_NO: break;
+    case HIDDEN_IGNORE: break;
+    }
+
     // Unmapped, destroyed or translucent windows must not contribute to the ignore region.
     // Same applies to override_redirect windows, which some screenshooter apps employ
     // (s. e.g. xfce4-screenshooter
@@ -1078,7 +991,7 @@ paint_all(Display *dpy, XserverRegion region) {
 
     // Note that undamaged windows should not contribute to the ignore
     // region. Otherwise VBoxManager makes other windows disappear during startup.
-    if(unlikely(ignore_region_is_dirty)){
+    if(unlikely(ignore_region_is_dirty || clip_changed)){
       // maybe_todo: pass only clipped rects, actually visible on screen.
       // Now we may choose the ignore region from a big window which
       // resides largely outside the screen.
@@ -1269,6 +1182,30 @@ add_damage(Display *dpy, XserverRegion damage) {
   }
 }
 
+
+static void
+add_damage_if_hidden_changed(Window window, bool is_reparent_event) {
+  win *w = find_win_any_parent(window);
+  if(unlikely(!w)){
+    return;
+  }
+  if(is_reparent_event){
+    win_register_client_events(window);
+  }
+  hiddentype hidden_type = win_state_is_hidden(window) ? HIDDEN_YES : HIDDEN_NO;
+  // _NET_WM_STATE may change without altering _NET_WM_STATE_HIDDEN, so
+  // check, if there's need for action.
+  if(w->hidden_type == hidden_type){
+    return;
+  }
+  w->hidden_type = hidden_type;
+  if(w->extents){
+    add_damage(dpy, w->extents);
+  }
+  clip_changed = True;
+  set_paint_ignore_region_dirty();
+}
+
 static void
 repair_win(Display *dpy, win *w) {
   XserverRegion parts;
@@ -1425,7 +1362,7 @@ handle_ConfigureNotify(Display *dpy, XConfigureEvent *ce);
 static void
 map_win(Display *dpy, Window id,
         unsigned long sequence, Bool fade) {
-  win *w = find_win(dpy, id);
+  win *w = find_win(id);
 
   if (unlikely(!w)) return;
 
@@ -1520,7 +1457,7 @@ unmap_callback(Display *dpy, win *w) {
 
 static void
 unmap_win(Display *dpy, Window id, Bool fade) {
-  win *w = find_win(dpy, id);
+  win *w = find_win(id);
 
   if (!w) return;
 
@@ -1662,6 +1599,16 @@ set_opacity(Display *dpy, win *w, unsigned long opacity) {
   set_paint_ignore_region_dirty();
 }
 
+
+static uint
+win_suggest_opacity(win* w, bool* is_userdefined){
+  uint default_op = (uint)(win_type_opacity[w->window_type]*OPAQUE);
+  uint actual_opacity = get_opacity_prop(g_dpy, w, default_op);
+  *is_userdefined = actual_opacity != default_op;
+  return actual_opacity;
+}
+
+
 static void
 add_win(Display *dpy, Window id, Window prev) {
   win *new = calloc(1, sizeof(win));
@@ -1729,7 +1676,7 @@ add_win(Display *dpy, Window id, Window prev) {
   new->opacity = OPAQUE;
 
   new->border_clip = None;
-  get_frame_extents(dpy, id,
+  get_frame_extents(new,
     &new->left_width, &new->right_width,
     &new->top_width, &new->bottom_width);
 
@@ -1738,9 +1685,7 @@ add_win(Display *dpy, Window id, Window prev) {
 
   if (new->a.map_state == IsViewable) {
     new->window_type = determine_wintype(dpy, id, id);
-    if (inactive_opacity && IS_NORMAL_WIN(new)) {
-      new->opacity = INACTIVE_OPACITY;
-    }
+    new->opacity = win_suggest_opacity(new, &new->userdefined_opacity);
     map_win(dpy, id, new->damage_sequence - 1, True);
   }
 }
@@ -1833,7 +1778,7 @@ Bool g_configure_needed = False;
 
 static void
 handle_ConfigureNotify(Display *dpy, XConfigureEvent *ce) {
-  win *w = find_win(dpy, ce->window);
+  win *w = find_win(ce->window);
 
   if (unlikely(!w)) {
     if (ce->window == root) {
@@ -1863,7 +1808,7 @@ handle_ConfigureNotify(Display *dpy, XConfigureEvent *ce) {
 
 static void
 circulate_win(Display *dpy, XCirculateEvent *ce) {
-  win *w = find_win(dpy, ce->window);
+  win *w = find_win(ce->window);
   Window new_above;
 
   if (!w) return;
@@ -1939,7 +1884,7 @@ destroy_callback(Display *dpy, win *w) {
 
 static void
 destroy_win(Display *dpy, Window id, Bool fade) {
-  win *w = find_win(dpy, id);
+  win *w = find_win(id);
 
   if (w) w->destroyed = True;
 
@@ -1979,7 +1924,7 @@ dump_wins(void) {
 
 static void
 damage_win(Display *dpy, XDamageNotifyEvent *de) {
-  win *w = find_win(dpy, de->drawable);
+  win *w = find_win(de->drawable);
 
   if (unlikely(!w)) return;
 
@@ -2353,7 +2298,9 @@ main(int argc, char **argv) {
   int o;
   int longopt_idx;
   Bool no_dock_shadow = False;
-  bufferInit(ignore_ringbuf, 2048, ulong);
+  if(!event_init()){
+    exit(1);
+  }
 
   for (i = 0; i < NUM_WINTYPES; ++i) {
     win_type_fade[i] = False;
@@ -2517,6 +2464,14 @@ main(int argc, char **argv) {
     "_NET_FRAME_EXTENTS", False);
   atom_gtk_frame_extents = XInternAtom(dpy,
     "_GTK_FRAME_EXTENTS", False);
+  atom_net_wm_state = XInternAtom(dpy,
+    "_NET_WM_STATE", False);
+  atom_net_wm_state_hidden = XInternAtom (dpy,
+    "_NET_WM_STATE_HIDDEN", False);
+  atom_net_wm_state_focused = XInternAtom (dpy,
+    "_NET_WM_STATE_FOCUSED", False);
+  atom_net_active_window = XInternAtom (dpy,
+    "_NET_ACTIVE_WINDOW", False);
   win_type[WINTYPE_DESKTOP] = XInternAtom(dpy,
     "_NET_WM_WINDOW_TYPE_DESKTOP", False);
   win_type[WINTYPE_DOCK] = XInternAtom(dpy,
@@ -2633,8 +2588,8 @@ main(int argc, char **argv) {
           // the right kind of FocusOut event
           if (ev.xfocus.detail == NotifyPointer) break;
 
-          win *fw = find_win(dpy, ev.xfocus.window);
-          if (IS_NORMAL_WIN(fw)) {
+          win *fw = find_win(ev.xfocus.window);
+          if (IS_NORMAL_WIN(fw) && ! fw->userdefined_opacity) {
             set_opacity(dpy, fw, OPAQUE);
           }
           break;
@@ -2648,8 +2603,8 @@ main(int argc, char **argv) {
           if (ev.xfocus.mode != NotifyGrab
               && ev.xfocus.detail == NotifyVirtual) break;
 
-          win *fw = find_win(dpy, ev.xfocus.window);
-          if (IS_NORMAL_WIN(fw)) {
+          win *fw = find_win(ev.xfocus.window);
+          if (IS_NORMAL_WIN(fw) && ! fw->userdefined_opacity) {
             set_opacity(dpy, fw, INACTIVE_OPACITY);
           }
           break;
@@ -2671,9 +2626,21 @@ main(int argc, char **argv) {
           unmap_win(dpy, ev.xunmap.window, True);
           break;
         case ReparentNotify:
+          // Reparent for instance occurs, when the window manager restarts. In the
+          // process, events we registered for previously are lost. Events for toplevel
+          // windows, as well as PropertyChange events for non-toplevel clients are
+          // re-registered in add_win. However, *afterwards* the client may be reparented
+          // *again*, from root to its corresponding toplevel window. Thus, we have to
+          // register client events again!
+          // Note that currently we do NOT check for "stale" window states. Possibly,
+          // a hidden window where the client is reparented may remain hidden.
+          // I did not see this in pracice though, since we take the _NET_WM_STATE_HIDDEN
+          // from the client window and the client *should* be tied to its toplevel window.
           if (ev.xreparent.parent == root) {
             add_win(dpy, ev.xreparent.window, 0);
           } else {
+            add_damage_if_hidden_changed(ev.xreparent.window, true);
+            // FIXME: we only manage toplevel windows, so does this EVER fire?
             destroy_win(dpy, ev.xreparent.window, True);
           }
           break;
@@ -2716,15 +2683,20 @@ main(int argc, char **argv) {
               }
             }
           }
+          // if (ev.xproperty.atom == atom_net_active_window) {
+          //   fprintf(stderr, "active win changed\n");
+          // }
+
           /* check if Trans property was changed */
           if (ev.xproperty.atom == atom_opacity) {
             /* reset mode and redraw window */
-            win *w = find_win(dpy, ev.xproperty.window);
+            win *w = find_win(ev.xproperty.window);
             if (w) {
-              double def = win_type_opacity[w->window_type];
-              set_opacity(dpy, w,
-                get_opacity_prop(dpy, w, (unsigned long)(OPAQUE * def)));
+              uint opacity = win_suggest_opacity(w, &w->userdefined_opacity);
+              set_opacity(dpy, w, opacity);
             }
+          } else if (ev.xproperty.atom == atom_net_wm_state) {
+            add_damage_if_hidden_changed(ev.xproperty.window, false);
           }
           break;
         case SelectionClear:

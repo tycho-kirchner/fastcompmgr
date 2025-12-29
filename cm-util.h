@@ -5,6 +5,9 @@
 
 extern time_t _program_start_secs;
 
+#define likely(x)       __builtin_expect(!!(x), 1)
+#define unlikely(x)     __builtin_expect(!!(x), 0)
+
 #define ACCESS_ONCE(x) (*(volatile typeof(x) *)&(x))
 
 #define READ_ONCE(x) \
