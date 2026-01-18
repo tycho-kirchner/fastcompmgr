@@ -36,8 +36,9 @@ typedef enum {
 
 // Cache whether to draw a shadow or not
 typedef enum {
-  SHADOW_UNKNWON, // MUST ALWAYS STAY first, due to init optimization in add_win
-  SHADOW_YES,
+  SHADOW_UNKNOWN, // MUST ALWAYS STAY first, due to init optimization in add_win
+  SHADOW_FULL,
+  SHADOW_NOCENTER,
   SHADOW_NO
 } shadowtype;
 

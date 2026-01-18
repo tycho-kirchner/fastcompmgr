@@ -11,6 +11,7 @@
  *
  */
 
+#include <assert.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -475,9 +476,51 @@ presum_gaussian(conv *map) {
   }
 }
 
+/// Make that part of the shadow transparent that is immediately below its window
+static void make_transparent_shadowcenter(int width, int height, int swidth, int sheight,
+                                          unsigned char *data){
+  int ylimit;
+  int x, y;
+  int x_diff;
+
+  if(shadow_offset_x < 0){
+    x = -shadow_offset_x;
+    if(swidth - x < width){
+      x_diff = swidth-x;
+    } else {
+      x_diff = width;
+    }
+  } else {
+    x = 0;
+    x_diff = width - shadow_offset_x;
+  }
+
+  if(shadow_offset_y < 0){
+    y = -shadow_offset_y;
+    if(sheight - y < height){
+      ylimit = sheight;
+    } else {
+      ylimit = height + y;
+    }
+  } else {
+    y = 0;
+    ylimit = height - shadow_offset_y;
+  }
+
+  if(likely(x_diff > 0)){
+    assert(y >=0);
+    assert(ylimit <= sheight);
+    assert(x >=0 && x < swidth);
+    assert(x+x_diff <= swidth);
+    for(; y < ylimit ; y++){
+      memset(&data[y * swidth + x], 0, x_diff);
+    }
+  }
+}
+
 static XImage *
 make_shadow(Display *dpy, double opacity,
-            int width, int height) {
+            int width, int height, shadowtype shadow_type) {
   XImage *ximage;
   unsigned char *data;
   int gsize = gaussian_map->size;
@@ -580,18 +623,25 @@ make_shadow(Display *dpy, double opacity,
     }
   }
 
+  switch (shadow_type) {
+  case SHADOW_UNKNOWN:
+  case SHADOW_NO: assert(false);
+  case SHADOW_FULL: break;
+  case SHADOW_NOCENTER:
+    make_transparent_shadowcenter(width, height, swidth, sheight, data);
+  }
   return ximage;
 }
 
 static Picture
-shadow_picture(Display *dpy, double opacity, Picture alpha_pict,
+shadow_picture(Display *dpy, double opacity, shadowtype shadow_type,
                int width, int height, int *wp, int *hp) {
   XImage *shadowImage;
   Pixmap shadowPixmap;
   Picture shadow_picture;
   GC gc;
 
-  shadowImage = make_shadow(dpy, opacity, width, height);
+  shadowImage = make_shadow(dpy, opacity, width, height, shadow_type);
   if (!shadowImage) return None;
 
   shadowPixmap = XCreatePixmap(dpy, root,
@@ -679,6 +729,47 @@ paint_root(Display *dpy) {
     root_width, root_height);
 }
 
+static shadowtype shadow_find_type(win *w){
+  if(unlikely(!w->window_type) ||
+     ! win_type_shadow[w->window_type] ||
+     is_gtk_frame_extent(dpy, w->id)){
+    return SHADOW_NO;
+  }
+  if (w->mode == WINDOW_SOLID && ! w->a.override_redirect) {
+    return SHADOW_FULL;
+  }
+  if (w->mode != WINDOW_SOLID && w->a.override_redirect) {
+    // GTK4 may may render popups and menus using non-solid override_redirect windows.
+    // Avoid Double-shadow and only draw shadows in case of WINTYPE_NOTIFY. Alternatively,
+    // or additionally, we could use _NET_WM_OPAQUE_REGION, s. also
+    // https://gitlab.gnome.org/GNOME/gtk/-/issues/3879
+    switch(w->window_type){
+    case WINTYPE_NOTIFY: return SHADOW_FULL;
+    default: return SHADOW_NO;
+    }
+  }
+
+  // A non-solid (e.g. ARGB) XOR override_redirect window. Render a shadow for those only
+  // at the borders but not directly below the window. Examples include:
+  // * transparent terminals (ARGB): a center-shadow would make the font less readable
+  // * zoom's screen-share (override_redirect): a center-shadow darkens the whole desktop.
+  //   Note: currently, we do not track whether a window makes use of the XShape extension.
+  //         zoom does, so in the future we may use that instead.
+  return SHADOW_NOCENTER;
+
+}
+
+static bool shadow_should_render(shadowtype t){
+  switch (t) {
+  case SHADOW_UNKNOWN: return false;
+  case SHADOW_FULL: return true;
+  case SHADOW_NOCENTER: return true;
+  case SHADOW_NO: return false;
+  }
+  assert(false);
+  return false;
+}
+
 static XserverRegion
 win_extents(Display *dpy, win *w) {
   XRectangle r;
@@ -688,40 +779,11 @@ win_extents(Display *dpy, win *w) {
   r.width = w->a.width + w->a.border_width * 2;
   r.height = w->a.height + w->a.border_width * 2;
 
-  if(unlikely(w->shadow_type == SHADOW_UNKNWON)){
-    // override_redirect: looking at xlib's documentation for the "Override Redirect Flag", it becomes
-    // clear that toolkits will typically set this flag for popup windows.
-    // On the other hand, WINTYPE_NORMAL windows setting override_redirect, are likely
-    // some kind of special windows, as seen in zoom screenshare. At least in zoom's case,
-    // the shadow darkens the whole desktop. A better fix might be to render
-    // four shadow images around the window instead of one huge shadow. But first
-    // check, why dcompmgr does not have this problem.
-    // See also: https://github.com/regolith-linux/regolith-compositor-compton-glx/issues/3
-    bool shadow_yes = (likely(w->window_type)
-      && win_type_shadow[w->window_type] &&
-      (! w->a.override_redirect || w->window_type != WINTYPE_NORMAL) &&
-      ! is_gtk_frame_extent(dpy, w->id));
-    // Firefox's bookmark-dragging renders a large ugly shadow. Since these as
-    // well as Tab-popups are ARGB-windows, stay safe and only draw shadows on
-    // non-solid windows for types normal/dialog . Note that apparently Compiz
-    // does not draw shadows on any ARGB windows, so nothing unusual here. See
-    // also https://github.com/chjj/compton/issues/201
-    // Since we have the -C flag to control for shadows on panels/docks, respect
-    // this setting by below WINTYPE_DOCK (and above win_type_shadow[])
-    if (w->mode != WINDOW_SOLID ) {
-      switch(w->window_type){
-      case WINTYPE_NORMAL:
-      case WINTYPE_DIALOG:
-      case WINTYPE_DOCK:
-        shadow_yes = shadow_yes && true; break;
-      default:
-        shadow_yes = false;
-      }
-    }
-    w->shadow_type = (shadow_yes) ? SHADOW_YES : SHADOW_NO;
+  if(unlikely(w->shadow_type == SHADOW_UNKNOWN)){
+    w->shadow_type = shadow_find_type(w);
   }
 
-  if (w->shadow_type == SHADOW_YES) {
+  if (shadow_should_render(w->shadow_type)) {
     XRectangle sr;
 
     w->shadow_dx = shadow_offset_x;
@@ -739,7 +801,7 @@ win_extents(Display *dpy, win *w) {
       }
 
       w->shadow = shadow_picture(
-        dpy, opacity, w->alpha_pict,
+        dpy, opacity, w->shadow_type,
         w->a.width + w->a.border_width * 2,
         w->a.height + w->a.border_width * 2,
         &w->shadow_width, &w->shadow_height);
@@ -1085,7 +1147,7 @@ paint_all(Display *dpy, XserverRegion region) {
     XFixesSetPictureClipRegion(dpy,
       root_buffer, 0, 0, w->border_clip);
 
-    if(w->shadow_type == SHADOW_YES) {
+    if(shadow_should_render(w->shadow_type)) {
       XRenderComposite(
         dpy, PictOpOver, cshadow_picture, w->shadow,
         root_buffer, 0, 0, 0, 0,
