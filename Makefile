@@ -1,7 +1,7 @@
 PACKAGES = x11 xcomposite xfixes xdamage xrender
 LIBS = `pkg-config --libs ${PACKAGES}` -lm
 INCS = `pkg-config --cflags ${PACKAGES}`
-CFLAGS = -Wall -O3 -flto -fno-plt -pipe
+CFLAGS = -Wall -O2 -flto -fno-plt -pipe
 LDFLAGS = -flto -Wl,--sort-common -Wl,--as-needed -Wl,-z,now -Wl,-z,pack-relative-relocs
 PREFIX = /usr/local
 MANDIR = ${PREFIX}/share/man/man1
