@@ -6,6 +6,8 @@
 
 #include "ringbuffer.h"
 
+typedef unsigned long ulong;
+
 
 ringBuffer_typedef(ulong, IgnoreErrRingbuf);
 static IgnoreErrRingbuf ignore_ringbuf;
