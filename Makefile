@@ -16,9 +16,9 @@ fastcompmgr: $(OBJS)
 
 install: fastcompmgr
 	@mkdir -p "${PREFIX}/bin"
-	@cp fastcompmgr "${PREFIX}/bin"
+	@install -m755 fastcompmgr "${PREFIX}/bin"
 	@mkdir -p "${MANDIR}"
-	@cp fastcompmgr.1 "${MANDIR}"
+	@install -m644 fastcompmgr.1 "${MANDIR}"
 
 uninstall:
 	@rm -f "${PREFIX}/bin/fastcompmgr"
