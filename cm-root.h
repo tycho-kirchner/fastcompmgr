@@ -11,6 +11,8 @@ extern Picture root_buffer;
 extern int root_width;
 extern int root_height;
 extern const char *root_background_props[];
+extern Atom atom_rootpmap_id;
+extern Atom atom_xsetroot_id;
 
 
 bool root_init();

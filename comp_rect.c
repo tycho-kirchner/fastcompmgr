@@ -42,9 +42,9 @@ bool rect_paint_needed(CompRect* ignore_reg, CompRect* reg){
 
     // calculate the intersection rect.
     short x1 = (ignore_reg->x1 > reg->x1) ? ignore_reg->x1 : reg->x1;
-    short x2 = (ignore_reg->x2 < reg->x2) ? ignore_reg->x1 : reg->x1;
+    short x2 = (ignore_reg->x2 < reg->x2) ? ignore_reg->x2 : reg->x2;
     short y1 = (ignore_reg->y1 > reg->y1) ? ignore_reg->y1 : reg->y1;
-    short y2 = (ignore_reg->y2 < reg->y2) ? ignore_reg->y1 : reg->y1;
+    short y2 = (ignore_reg->y2 < reg->y2) ? ignore_reg->y2 : reg->y2;
     short w = x2 - x1;
     short h = y2 - y1;
 

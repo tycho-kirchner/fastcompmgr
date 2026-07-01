@@ -18,6 +18,9 @@ const char *root_background_props[] = {
   0
 };
 
+Atom atom_rootpmap_id;
+Atom atom_xsetroot_id;
+
 
 static inline int
 _get_valid_pixmap_depth(Pixmap pxmap) {
@@ -112,10 +115,11 @@ Picture root_create_tile() {
 
   pixmap = None;
 
-  for (p=0; root_background_props[p]; p++) {
+  Atom root_atoms[] = { atom_rootpmap_id, atom_xsetroot_id, 0 };
+  for (p=0; root_atoms[p]; p++) {
     prop = NULL;
     res = XGetWindowProperty(g_dpy, root,
-          XInternAtom(g_dpy, root_background_props[p], False),
+          root_atoms[p],
           0, 4, False, AnyPropertyType, &actual_type,
           &actual_format, &nitems, &bytes_after, &prop);
     if (res != Success || prop == NULL ){

@@ -54,7 +54,10 @@ typedef enum {
 
 typedef struct _win {
   struct _win *next;
+  struct _win *prev;
   Window id;
+  Window client_id; // cached client window for property queries
+  Bool client_id_resolved; // true if find_client_win has already been attempted
 #if HAS_NAME_WINDOW_PIXMAP
   Pixmap pixmap;
 #endif
@@ -69,7 +72,6 @@ typedef struct _win {
   Picture picture;
   Picture alpha_pict;
   Picture alpha_border_pict;
-  Picture shadow_pict;
   XserverRegion border_size;
   XserverRegion extents;
   Picture shadow;
@@ -93,6 +95,7 @@ typedef struct _win {
   Bool need_configure;
   bool configure_size_changed;
   XConfigureEvent queue_configure;
+  Bool border_size_dirty;
 
   /* for drawing translucent windows */
   XserverRegion border_clip;
@@ -103,7 +106,11 @@ typedef struct _win {
 extern win *list;
 
 win* find_win(Window id);
+win* find_win_any_state(Window id);
 win* find_win_any_parent(Window w);
+
+void win_hash_insert(win *w);
+void win_hash_remove(Window id);
 
 bool win_state_is_hidden(Window window);
 bool win_is_client(Window window);

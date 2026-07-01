@@ -1,5 +1,7 @@
 
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include <X11/Xatom.h>
 
@@ -12,68 +14,104 @@
 
 win *list;
 
-typedef struct _AtomArr {
-  Atom *atoms;
-  unsigned long n_items;
-} AtomArr;
+/* Simple open-addressing hash table: Window -> win* */
+static win **win_hash = NULL;
+static unsigned int win_hash_size = 0;
+static unsigned int win_hash_count = 0;
+static unsigned int win_hash_tombstones = 0;
 
+#define HASH_INITIAL_SIZE 256
+#define HASH_LOAD_FACTOR(num, den) ((num) >= ((den) * 3 / 4))
 
-_Static_assert (sizeof(Atom) == sizeof(long),
-                "_query_atom_values depends on long-sized atom. See XGetWindowProperty");
-
-static AtomArr _query_atom_values(Window window, Atom property) {
-  Atom actual_type;
-  int actual_format;
-  unsigned long n_items, bytes_after;
-  Atom *atoms = NULL;
-  AtomArr ret;
-
-  set_ignore(g_dpy, NextRequest(g_dpy));
-  int result = XGetWindowProperty(g_dpy, window, property, 0, (~0L), False,
-                                  XA_ATOM, &actual_type, &actual_format,
-                                  &n_items, &bytes_after, (unsigned char**)&atoms);
-  if(result != Success || atoms == NULL){
-    memset(&ret, 0, sizeof(AtomArr));
-    return ret;
-  }
-  if(unlikely(actual_format != 32)){
-    fprintf(stderr, "fastcompmgr error: expected actual_format==32, got %d\n",
-            actual_format);
-    XFree(atoms);
-    memset(&ret, 0, sizeof(AtomArr));
-    return ret;
-  }
-  ret.atoms = atoms;
-  ret.n_items = n_items;
-  return ret;
+static unsigned int hash_window(Window id) {
+  return (unsigned int)id;
 }
 
-
-static bool win_has_atom(Window window, Atom atom){
-  Atom type = None;
-  int format;
-  unsigned long nitems, after;
-  unsigned char *data = NULL;
-  int res;
-
-  set_ignore(g_dpy, NextRequest(g_dpy));
-  res = XGetWindowProperty(
-    g_dpy, window, atom, 0, 0, False,
-    AnyPropertyType, &type, &format, &nitems,
-    &after, &data);
-  if (likely(res == Success && data != NULL )) {
-      XFree(data);
-      if (likely(type)) return true;
+static Bool win_hash_resize(void) {
+  unsigned int new_size = win_hash_size ? win_hash_size * 2 : HASH_INITIAL_SIZE;
+  win **new_hash = calloc(new_size, sizeof(win*));
+  if (!new_hash) return False;
+  for (unsigned int i = 0; i < win_hash_size; i++) {
+    win *w = win_hash[i];
+    if (w && w != (win*)1) {
+      unsigned int idx = hash_window(w->id) & (new_size - 1);
+      while (new_hash[idx]) {
+        idx = (idx + 1) & (new_size - 1);
+      }
+      new_hash[idx] = w;
+    }
   }
-  return false;
+  free(win_hash);
+  win_hash = new_hash;
+  win_hash_size = new_size;
+  win_hash_tombstones = 0;
+  return True;
 }
 
+void win_hash_insert(win *w) {
+  if (HASH_LOAD_FACTOR(win_hash_count + 1, win_hash_size)
+      || win_hash_tombstones > win_hash_count) {
+    if (!win_hash_resize()) {
+      /* OOM: table may still have ~25% free slots because resize triggers at 75%.
+       * Insertion will proceed, but guard against infinite loops below. */
+    }
+  }
+  unsigned int idx = hash_window(w->id) & (win_hash_size - 1);
+  unsigned int probes = 0;
+  while (win_hash[idx] && win_hash[idx] != (win*)1) {
+    if (win_hash[idx]->id == w->id) {
+      win_hash[idx] = w; // replace
+      return;
+    }
+    idx = (idx + 1) & (win_hash_size - 1);
+    if (unlikely(++probes >= win_hash_size)) {
+      /* Table is completely full of live entries. This should never happen
+       * because resize triggers at 75%, but guard against pathological OOM. */
+      return;
+    }
+  }
+  win_hash[idx] = w;
+  win_hash_count++;
+}
+
+void win_hash_remove(Window id) {
+  if (!win_hash_size) return;
+  unsigned int idx = hash_window(id) & (win_hash_size - 1);
+  while (win_hash[idx]) {
+    if (win_hash[idx] != (win*)1 && win_hash[idx]->id == id) {
+      win_hash[idx] = (win*)1; // tombstone
+      win_hash_count--;
+      win_hash_tombstones++;
+      return;
+    }
+    idx = (idx + 1) & (win_hash_size - 1);
+  }
+}
+
+win* win_hash_lookup(Window id) {
+  if (!win_hash_size) return NULL;
+  unsigned int idx = hash_window(id) & (win_hash_size - 1);
+  while (win_hash[idx]) {
+    if (win_hash[idx] != (win*)1 && win_hash[idx]->id == id && !win_hash[idx]->destroyed) {
+      return win_hash[idx];
+    }
+    idx = (idx + 1) & (win_hash_size - 1);
+  }
+  return NULL;
+}
 
 win* find_win(Window id) {
-  win *w;
-  for (w = list; w; w = w->next) {
-    if (w->id == id && !w->destroyed)
-      return w;
+  return win_hash_lookup(id);
+}
+
+win* find_win_any_state(Window id) {
+  if (!win_hash_size) return NULL;
+  unsigned int idx = hash_window(id) & (win_hash_size - 1);
+  while (win_hash[idx]) {
+    if (win_hash[idx] != (win*)1 && win_hash[idx]->id == id) {
+      return win_hash[idx];
+    }
+    idx = (idx + 1) & (win_hash_size - 1);
   }
   return NULL;
 }
@@ -100,6 +138,35 @@ win* find_win_any_parent(Window w) {
   return find_win_any_parent(parent);
 }
 
+
+typedef struct _AtomArr {
+    Atom *atoms;
+    unsigned long n_items;
+} AtomArr;
+
+static AtomArr
+_query_atom_values(Window window, Atom property) {
+    AtomArr result = {NULL, 0};
+    Atom actual_type;
+    int actual_format;
+    unsigned long nitems, bytes_after;
+    unsigned char *data = NULL;
+    int status = XGetWindowProperty(g_dpy, window, property, 0, 1024, False, XA_ATOM,
+                                    &actual_type, &actual_format, &nitems, &bytes_after, &data);
+    if (status == Success && actual_type == XA_ATOM && data) {
+        result.atoms = (Atom *)data;
+        result.n_items = nitems;
+    }
+    return result;
+}
+
+static bool
+win_has_atom(Window window, Atom atom) {
+    AtomArr arr = _query_atom_values(window, atom);
+    bool has = (arr.atoms != NULL && arr.n_items > 0);
+    if (arr.atoms) XFree(arr.atoms);
+    return has;
+}
 
 bool win_state_is_hidden(Window window) {
   AtomArr atom_arr;
