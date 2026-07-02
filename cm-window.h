@@ -54,6 +54,7 @@ typedef enum {
 
 typedef struct _win {
   struct _win *next;
+  struct _win *prev;
   Window id;
 #if HAS_NAME_WINDOW_PIXMAP
   Pixmap pixmap;

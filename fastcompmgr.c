@@ -1743,6 +1743,12 @@ add_win(Display *dpy, Window id, Window prev) {
     &new->top_width, &new->bottom_width);
 
   new->next = *p;
+  if (*p) {
+    new->prev = (*p)->prev;
+    (*p)->prev = new;
+  } else {
+    new->prev = NULL;
+  }
   *p = new;
 
   if (new->a.map_state == IsViewable) {
@@ -1768,23 +1774,29 @@ restack_win(Display *dpy, win *w, Window new_above) {
   }
 
   if (old_above != new_above) {
-    win **prev;
+    win **prev_slot;
+    win *old_prev = w->prev;
 
     /* unhook */
-    for (prev = &list; *prev; prev = &(*prev)->next) {
-      if ((*prev) == w) break;
+    if (w->next) w->next->prev = old_prev;
+    if (old_prev) {
+      old_prev->next = w->next;
+    } else {
+      list = w->next;
     }
-
-    *prev = w->next;
 
     /* rehook */
-    for (prev = &list; *prev; prev = &(*prev)->next) {
-      if ((*prev)->id == new_above && !(*prev)->destroyed)
+    win *new_pred = NULL;
+    for (prev_slot = &list; *prev_slot; prev_slot = &(*prev_slot)->next) {
+      if ((*prev_slot)->id == new_above && !(*prev_slot)->destroyed)
         break;
+      new_pred = *prev_slot;
     }
 
-    w->next = *prev;
-    *prev = w;
+    w->next = *prev_slot;
+    w->prev = (*prev_slot) ? (*prev_slot)->prev : new_pred;
+    if (*prev_slot) (*prev_slot)->prev = w;
+    *prev_slot = w;
   }
 }
 
@@ -1887,12 +1899,17 @@ circulate_win(Display *dpy, XCirculateEvent *ce) {
 
 static void
 finish_destroy_win(Display *dpy, Window id) {
-  win **prev, *w;
+  win *w;
 
-  for (prev = &list; (w = *prev); prev = &w->next) {
+  for (w = list; w; w = w->next) {
     if (w->id == id && w->destroyed) {
       finish_unmap_win(dpy, w);
-      *prev = w->next;
+      if (w->next) w->next->prev = w->prev;
+      if (w->prev) {
+        w->prev->next = w->next;
+      } else {
+        list = w->next;
+      }
 
       if (w->alpha_pict) {
         XRenderFreePicture(dpy, w->alpha_pict);
