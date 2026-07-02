@@ -1613,11 +1613,6 @@ determine_mode(Display *dpy, win *w) {
     w->alpha_border_pict = None;
   }
 
-  if (w->shadow_pict) {
-    XRenderFreePicture(dpy, w->shadow_pict);
-    w->shadow_pict = None;
-  }
-
   if (w->a.class == InputOnly) {
     format = 0;
   } else {
@@ -1712,7 +1707,6 @@ add_win(Display *dpy, Window id, Window prev) {
 
   new->alpha_pict = None;
   new->alpha_border_pict = None;
-  new->shadow_pict = None;
   new->border_size = None;
   new->extents = None;
   new->shadow = None;
@@ -1902,11 +1896,6 @@ finish_destroy_win(Display *dpy, Window id) {
       if (w->alpha_border_pict) {
         XRenderFreePicture(dpy, w->alpha_border_pict);
         w->alpha_border_pict = None;
-      }
-
-      if (w->shadow_pict) {
-        XRenderFreePicture(dpy, w->shadow_pict);
-        w->shadow_pict = None;
       }
 
       /* fix leak, from freedesktop repo */
