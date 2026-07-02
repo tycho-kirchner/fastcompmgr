@@ -910,7 +910,13 @@ get_frame_extents(win* w,
   *top = 0;
   *bottom = 0;
 
-  client_window = find_client_win(dpy, w->id);
+  if (w->client_id_resolved) {
+    client_window = w->client_id;
+  } else {
+    client_window = find_client_win(dpy, w->id);
+    w->client_id = client_window;
+    w->client_id_resolved = True;
+  }
   if (!client_window) {
     w->hidden_type = win_state_is_hidden( w->id) ? HIDDEN_YES : HIDDEN_NO;
     return;
@@ -966,7 +972,14 @@ win_paint_needed(win* w, CompRect* ignore_reg){
     case HIDDEN_UNKNOWN: {
       fprintf(stderr, "fastcompmgr warning: hidden state still unknown in "
                       "win_paint_needed: 0x%lx\n", w->id);
-      Window client_window = find_client_win(dpy, w->id);
+      Window client_window;
+      if (w->client_id_resolved) {
+        client_window = w->client_id;
+      } else {
+        client_window = find_client_win(dpy, w->id);
+        w->client_id = client_window;
+        w->client_id_resolved = True;
+      }
       if (!client_window) {
         // We already tried to find a client on add_win - give up for now.
         w->hidden_type = HIDDEN_IGNORE;
@@ -1253,6 +1266,8 @@ add_damage_if_hidden_changed(Window window, bool is_reparent_event) {
   }
   if(is_reparent_event){
     win_register_client_events(window);
+    w->client_id = 0; // invalidate cached client, will be re-resolved
+    w->client_id_resolved = False;
   }
   hiddentype hidden_type = win_state_is_hidden(window) ? HIDDEN_YES : HIDDEN_NO;
   // _NET_WM_STATE may change without altering _NET_WM_STATE_HIDDEN, so
