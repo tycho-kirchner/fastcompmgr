@@ -532,6 +532,8 @@ make_shadow(Display *dpy, double opacity,
   unsigned char d;
   int x_diff;
   int opacity_int = (int)(opacity * 25);
+  if (opacity_int < 0) opacity_int = 0;
+  if (opacity_int > 25) opacity_int = 25;
 
   data = malloc(swidth * sheight * sizeof(unsigned char));
   if (!data) return 0;
@@ -2434,9 +2436,14 @@ main(int argc, char **argv) {
         break;
       case 'r':
         shadow_radius = atoi(optarg);
+        if (shadow_radius < 0 || shadow_radius > 100) {
+          fprintf(stderr, "Warning: shadow radius %d out of range, using 12\n",
+                  shadow_radius);
+          shadow_radius = 12;
+        }
         break;
       case 'o':
-        shadow_opacity = atof(optarg);
+        shadow_opacity = normalize_d(atof(optarg));
         break;
       case 'l':
         shadow_offset_x = atoi(optarg);
