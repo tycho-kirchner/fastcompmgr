@@ -12,6 +12,7 @@
  */
 
 #include <assert.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -130,6 +131,14 @@ double fade_out_step = 0.03;
 int fade_delta = 10;
 int fade_time = 0;
 Bool fade_trans = False;
+
+volatile sig_atomic_t g_should_exit = 0;
+
+static void
+signal_handler(int signum) {
+  g_should_exit = 1;
+  (void)signum;
+}
 
 double inactive_opacity = 0;
 double frame_opacity = 0;
@@ -2474,6 +2483,8 @@ main(int argc, char **argv) {
   g_dpy = dpy;
 
   XSetErrorHandler(error);
+  signal(SIGINT, signal_handler);
+  signal(SIGTERM, signal_handler);
   if (synchronize) {
     XSynchronize(dpy, 1);
   }
@@ -2617,6 +2628,9 @@ main(int argc, char **argv) {
   }
 
   for (;;) {
+    if (unlikely(g_should_exit)) {
+      break;
+    }
     /*    dump_wins(); */
     do {
       if (!QLength(dpy)) {
@@ -2630,6 +2644,10 @@ main(int argc, char **argv) {
       }
 
       XNextEvent(dpy, &ev);
+
+      if (unlikely(g_should_exit)) {
+        break;
+      }
 
       if (likely((ev.type & 0x7f) != KeymapNotify)) {
         discard_ignore(dpy, ev.xany.serial);
@@ -2776,4 +2794,12 @@ main(int argc, char **argv) {
 
     check_paint(dpy);
   }
+
+  /* Clean shutdown on SIGINT/SIGTERM */
+  if (all_damage != None) XFixesDestroyRegion(dpy, all_damage);
+  if (g_xregion_tmp != None) XFixesDestroyRegion(dpy, g_xregion_tmp);
+  if (root_buffer != None) XRenderFreePicture(dpy, root_buffer);
+  if (root_picture != None) XRenderFreePicture(dpy, root_picture);
+  if (root_tile != None) XRenderFreePicture(dpy, root_tile);
+  XCloseDisplay(dpy);
 }
