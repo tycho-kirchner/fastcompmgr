@@ -1937,31 +1937,16 @@ finish_destroy_win(Display *dpy, Window id) {
   }
 }
 
-#if HAS_NAME_WINDOW_PIXMAP
-static void
-destroy_callback(Display *dpy, win *w) {
-  finish_destroy_win(dpy, w->id);
-}
-#endif
-
 static void
 destroy_win(Display *dpy, Window id, Bool fade) {
   win *w = find_win(id);
+  (void)fade;
 
   if (w) w->destroyed = True;
 
   set_paint_ignore_region_dirty();
 
-#if HAS_NAME_WINDOW_PIXMAP
-  if (w && w->pixmap && fade && win_type_fade[w->window_type]) {
-    set_fade(dpy, w, w->opacity * 1.0 / OPAQUE,
-      0.0, fade_out_step, destroy_callback,
-      False, True);
-  } else
-#endif
-  {
-    finish_destroy_win(dpy, id);
-  }
+  finish_destroy_win(dpy, id);
 }
 
 #if 0
