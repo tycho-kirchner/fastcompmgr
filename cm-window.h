@@ -85,6 +85,7 @@ typedef struct _win {
   unsigned long damage_sequence; /* sequence when damage was created */
   Bool destroyed;
   Bool paint_needed;
+  Bool border_size_dirty;
   unsigned int left_width;
   unsigned int right_width;
   unsigned int top_width;
