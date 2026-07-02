@@ -12,6 +12,7 @@
  */
 
 #include <assert.h>
+#include <errno.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -2331,6 +2332,12 @@ check_paint(Display *dpy){
   }
 }
 
+static int
+xioerror_handler(Display *dpy) {
+  (void)dpy;
+  fprintf(stderr, "fastcompmgr: fatal: X11 connection lost (XIOError)\n");
+  return 0;  /* Xlib will exit(1) after this returns */
+}
 
 int
 main(int argc, char **argv) {
@@ -2474,6 +2481,7 @@ main(int argc, char **argv) {
   g_dpy = dpy;
 
   XSetErrorHandler(error);
+  XSetIOErrorHandler(xioerror_handler);
   if (synchronize) {
     XSynchronize(dpy, 1);
   }
@@ -2622,9 +2630,26 @@ main(int argc, char **argv) {
       if (!QLength(dpy)) {
         // TODO: check and re-implement fade time logic.
         int timeout = (configure_timer_started) ? 2 : fade_timeout();
-        if (unlikely(poll(&ufd, 1, timeout) == 0)) {
+        int poll_ret = poll(&ufd, 1, timeout);
+        if (unlikely(poll_ret == 0)) {
           check_paint(dpy);
            //   run_fades(dpy);
+          break;
+        }
+        if (poll_ret > 0) {
+          if (ufd.revents & (POLLHUP | POLLERR | POLLNVAL)) {
+            fprintf(stderr, "fastcompmgr: fatal: X11 connection closed (poll: %s%s%s)\n",
+                    (ufd.revents & POLLHUP) ? "HUP " : "",
+                    (ufd.revents & POLLERR) ? "ERR " : "",
+                    (ufd.revents & POLLNVAL) ? "NVAL " : "");
+            break;
+          }
+        }
+        if (poll_ret < 0) {
+          if (errno == EINTR) {
+            continue;
+          }
+          perror("fastcompmgr: poll failed");
           break;
         }
       }
