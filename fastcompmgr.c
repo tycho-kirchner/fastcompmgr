@@ -1673,6 +1673,9 @@ win_suggest_opacity(win* w, bool* is_userdefined){
 
 static void
 add_win(Display *dpy, Window id, Window prev) {
+  win *existing = find_win_any_state(id);
+  if (unlikely(existing)) return;
+
   win *new = calloc(1, sizeof(win));
   win **p;
 
@@ -1744,6 +1747,8 @@ add_win(Display *dpy, Window id, Window prev) {
 
   new->next = *p;
   *p = new;
+
+  win_hash_insert(new);
 
   if (new->a.map_state == IsViewable) {
     new->window_type = determine_wintype(dpy, id, id);
@@ -1886,61 +1891,65 @@ circulate_win(Display *dpy, XCirculateEvent *ce) {
 }
 
 static void
-finish_destroy_win(Display *dpy, Window id) {
-  win **prev, *w;
+finish_destroy_win(Display *dpy, win *w) {
+  win **prev;
 
-  for (prev = &list; (w = *prev); prev = &w->next) {
-    if (w->id == id && w->destroyed) {
-      finish_unmap_win(dpy, w);
+  if (!w || !w->destroyed) return;
+
+  finish_unmap_win(dpy, w);
+  win_hash_remove(w->id);
+
+  for (prev = &list; *prev; prev = &(*prev)->next) {
+    if ((*prev) == w) {
       *prev = w->next;
-
-      if (w->alpha_pict) {
-        XRenderFreePicture(dpy, w->alpha_pict);
-        w->alpha_pict = None;
-      }
-
-      if (w->alpha_border_pict) {
-        XRenderFreePicture(dpy, w->alpha_border_pict);
-        w->alpha_border_pict = None;
-      }
-
-      if (w->shadow_pict) {
-        XRenderFreePicture(dpy, w->shadow_pict);
-        w->shadow_pict = None;
-      }
-
-      /* fix leak, from freedesktop repo */
-      if (w->shadow) {
-        XRenderFreePicture (dpy, w->shadow);
-        w->shadow = None;
-      }
-
-      if (w->damage != None) {
-        set_ignore(dpy, NextRequest(dpy));
-        XDamageDestroy(dpy, w->damage);
-        w->damage = None;
-      }
-
-      cleanup_fade(dpy, w);
-
-      if (w->border_clip) {
-        XFixesDestroyRegion(dpy, w->border_clip);
-        w->border_clip = None;
-      }
-      if(w->extents){
-        XFixesDestroyRegion(dpy, w->extents);
-        w->extents = None;
-      }
-      free(w);
       break;
     }
   }
+
+  if (w->alpha_pict) {
+    XRenderFreePicture(dpy, w->alpha_pict);
+    w->alpha_pict = None;
+  }
+
+  if (w->alpha_border_pict) {
+    XRenderFreePicture(dpy, w->alpha_border_pict);
+    w->alpha_border_pict = None;
+  }
+
+  if (w->shadow_pict) {
+    XRenderFreePicture(dpy, w->shadow_pict);
+    w->shadow_pict = None;
+  }
+
+  /* fix leak, from freedesktop repo */
+  if (w->shadow) {
+    XRenderFreePicture (dpy, w->shadow);
+    w->shadow = None;
+  }
+
+  if (w->damage != None) {
+    set_ignore(dpy, NextRequest(dpy));
+    XDamageDestroy(dpy, w->damage);
+    w->damage = None;
+  }
+
+  cleanup_fade(dpy, w);
+
+  if (w->border_clip) {
+    XFixesDestroyRegion(dpy, w->border_clip);
+    w->border_clip = None;
+  }
+  if(w->extents){
+    XFixesDestroyRegion(dpy, w->extents);
+    w->extents = None;
+  }
+  free(w);
 }
 
 #if HAS_NAME_WINDOW_PIXMAP
 static void
 destroy_callback(Display *dpy, win *w) {
-  finish_destroy_win(dpy, w->id);
+  finish_destroy_win(dpy, w);
 }
 #endif
 
@@ -1960,7 +1969,7 @@ destroy_win(Display *dpy, Window id, Bool fade) {
   } else
 #endif
   {
-    finish_destroy_win(dpy, id);
+    finish_destroy_win(dpy, w);
   }
 }
 
