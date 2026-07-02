@@ -44,6 +44,6 @@ void discard_ignore(Display *dpy, unsigned long sequence) {
 
 bool event_init()
 {
-  bufferInit(ignore_ringbuf, 2048, unsigned long);
+  bufferInit(ignore_ringbuf, 2047, unsigned long);
   return true;
 }
