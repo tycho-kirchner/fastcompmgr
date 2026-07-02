@@ -110,12 +110,22 @@ Picture root_create_tile() {
   int res;
   const char* valid_pix_str;
 
+  static Atom root_background_atoms[2] = {None, None};
+  static bool atoms_cached = false;
+
+  if (!atoms_cached) {
+    for (p=0; root_background_props[p]; p++) {
+      root_background_atoms[p] = XInternAtom(g_dpy, root_background_props[p], False);
+    }
+    atoms_cached = true;
+  }
+
   pixmap = None;
 
   for (p=0; root_background_props[p]; p++) {
     prop = NULL;
     res = XGetWindowProperty(g_dpy, root,
-          XInternAtom(g_dpy, root_background_props[p], False),
+          root_background_atoms[p],
           0, 4, False, AnyPropertyType, &actual_type,
           &actual_format, &nitems, &bytes_after, &prop);
     if (res != Success || prop == NULL ){
