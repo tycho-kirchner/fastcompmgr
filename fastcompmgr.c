@@ -85,6 +85,23 @@ double win_type_opacity[NUM_WINTYPES];
 Bool win_type_shadow[NUM_WINTYPES];
 Bool win_type_fade[NUM_WINTYPES];
 
+/* Cache XRenderFindVisualFormat by VisualID (common ids are < 256).
+ * This avoids an expensive server round-trip on every frame for each window. */
+static XRenderPictFormat* visual_format_cache[256] = {NULL};
+
+static XRenderPictFormat*
+find_visual_format(Display *dpy, Visual *visual) {
+  VisualID vid = XVisualIDFromVisual(visual);
+  if (vid < 256 && visual_format_cache[vid]) {
+    return visual_format_cache[vid];
+  }
+  XRenderPictFormat *fmt = XRenderFindVisualFormat(dpy, visual);
+  if (vid < 256) {
+    visual_format_cache[vid] = fmt;
+  }
+  return fmt;
+}
+
 #define REGISTER_PROP "_NET_WM_CM_S"
 
 #define OPAQUE 0xffffffff
@@ -1017,7 +1034,7 @@ paint_all(Display *dpy, XserverRegion region) {
       DefaultDepth(dpy, g_screen));
 
     root_buffer = XRenderCreatePicture(dpy, rootPixmap,
-      XRenderFindVisualFormat(dpy, DefaultVisual(dpy, g_screen)),
+      find_visual_format(dpy, DefaultVisual(dpy, g_screen)),
       0, 0);
 
     XFreePixmap(dpy, rootPixmap);
@@ -1074,7 +1091,7 @@ paint_all(Display *dpy, XserverRegion region) {
       if (w->pixmap) draw = w->pixmap;
 #endif
 
-      format = XRenderFindVisualFormat(dpy, w->a.visual);
+      format = find_visual_format(dpy, w->a.visual);
       pa.subwindow_mode = IncludeInferiors;
       w->picture = XRenderCreatePicture(
         dpy, draw, format, CPSubwindowMode, &pa);
@@ -1621,7 +1638,7 @@ determine_mode(Display *dpy, win *w) {
   if (w->a.class == InputOnly) {
     format = 0;
   } else {
-    format = XRenderFindVisualFormat(dpy, w->a.visual);
+    format = find_visual_format(dpy, w->a.visual);
   }
 
   if (format && format->type == PictTypeDirect
