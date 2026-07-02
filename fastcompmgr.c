@@ -716,6 +716,32 @@ solid_picture(Display *dpy, Bool argb, double a,
   return picture;
 }
 
+/* Cache solid alpha pictures (discretized to 256 levels).
+ * Creating a solid_picture involves a server round-trip (XCreatePixmap +
+ * XRenderCreatePicture + XRenderFillRectangle). Windows with the same opacity
+ * share the same alpha picture, so cache them globally. */
+static Picture g_alpha_pict_cache[256] = {None};
+static Picture g_border_alpha_pict = None;
+
+static Picture
+get_alpha_pict(Display *dpy, unsigned int opacity) {
+  int idx = opacity >> 24; // 0-255
+  if (g_alpha_pict_cache[idx] == None) {
+    g_alpha_pict_cache[idx] = solid_picture(
+      dpy, False, (double)opacity / OPAQUE, 0, 0, 0);
+  }
+  return g_alpha_pict_cache[idx];
+}
+
+static Picture
+get_border_alpha_pict(Display *dpy) {
+  if (g_border_alpha_pict == None) {
+    g_border_alpha_pict = solid_picture(
+      dpy, False, frame_opacity, 0, 0, 0);
+  }
+  return g_border_alpha_pict;
+}
+
 
 static void
 paint_root(Display *dpy) {
@@ -1156,12 +1182,10 @@ paint_all(Display *dpy, XserverRegion region) {
     }
 
     if (w->opacity != OPAQUE && !w->alpha_pict) {
-      w->alpha_pict = solid_picture(
-        dpy, False, (double)w->opacity / OPAQUE, 0, 0, 0);
+      w->alpha_pict = get_alpha_pict(dpy, w->opacity);
     }
     if (HAS_FRAME_OPACITY(w) && !w->alpha_border_pict) {
-      w->alpha_border_pict = solid_picture(
-        dpy, False, frame_opacity, 0, 0, 0);
+      w->alpha_border_pict = get_border_alpha_pict(dpy);
     }
 
     if (w->mode != WINDOW_SOLID || HAS_FRAME_OPACITY(w)) {
@@ -1603,15 +1627,10 @@ determine_mode(Display *dpy, win *w) {
 
   /* if trans prop == -1 fall back on  previous tests*/
 
-  if (w->alpha_pict) {
-    XRenderFreePicture(dpy, w->alpha_pict);
-    w->alpha_pict = None;
-  }
-
-  if (w->alpha_border_pict) {
-    XRenderFreePicture(dpy, w->alpha_border_pict);
-    w->alpha_border_pict = None;
-  }
+  /* These are cached global handles, not per-window resources.
+   * Never free them here; they are shared across all windows. */
+  w->alpha_pict = None;
+  w->alpha_border_pict = None;
 
   if (w->shadow_pict) {
     XRenderFreePicture(dpy, w->shadow_pict);
@@ -1894,15 +1913,10 @@ finish_destroy_win(Display *dpy, Window id) {
       finish_unmap_win(dpy, w);
       *prev = w->next;
 
-      if (w->alpha_pict) {
-        XRenderFreePicture(dpy, w->alpha_pict);
-        w->alpha_pict = None;
-      }
-
-      if (w->alpha_border_pict) {
-        XRenderFreePicture(dpy, w->alpha_border_pict);
-        w->alpha_border_pict = None;
-      }
+      /* alpha_pict and alpha_border_pict are cached global handles,
+       * not per-window resources. Never free them here. */
+      w->alpha_pict = None;
+      w->alpha_border_pict = None;
 
       if (w->shadow_pict) {
         XRenderFreePicture(dpy, w->shadow_pict);
