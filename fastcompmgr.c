@@ -1084,16 +1084,19 @@ paint_all(Display *dpy, XserverRegion region) {
     printf(" 0x%x", w->id);
 #endif
 
-    if (clip_changed) {
+    if (clip_changed || w->border_size_dirty) {
       if (w->border_size) {
         set_ignore(dpy, NextRequest(dpy));
         XFixesDestroyRegion(dpy, w->border_size);
         w->border_size = None;
       }
+      if (w->border_size_dirty) {
+        w->border_size_dirty = False;
+      }
       win_extents(dpy, w);
     }
 
-    if (!w->border_size) {
+    if (!w->border_size && !w->destroyed) {
       w->border_size = border_size (dpy, w);
     }
 
@@ -1429,6 +1432,7 @@ map_win(Display *dpy, Window id,
   if (unlikely(!w)) return;
 
   w->a.map_state = IsViewable;
+  w->border_size_dirty = True;
   w->window_type = determine_wintype(dpy, w->id, w->id);
 
   if (! w->border_clip) {
@@ -1812,6 +1816,7 @@ do_configure_win(Display *dpy, win* w){
       XRenderFreePicture(dpy, w->shadow);
       w->shadow = None;
     }
+    w->border_size_dirty = True;
   }
 
   w->a.width = ce->width;
