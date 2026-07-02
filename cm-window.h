@@ -69,7 +69,6 @@ typedef struct _win {
   Picture picture;
   Picture alpha_pict;
   Picture alpha_border_pict;
-  Picture shadow_pict;
   XserverRegion border_size;
   XserverRegion extents;
   Picture shadow;
