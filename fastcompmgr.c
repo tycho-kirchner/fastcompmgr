@@ -476,12 +476,17 @@ presum_gaussian(conv *map) {
   }
 }
 
-/// Make that part of the shadow transparent that is immediately below its window
+/// Make that part of the shadow transparent that is immediately below its window.
+/// For CSD windows with rounded corners, shrink the transparent area by the
+/// frame extents so the shadow remains visible under the decorative frame.
 static void make_transparent_shadowcenter(int width, int height, int swidth, int sheight,
-                                          unsigned char *data){
+                                          unsigned char *data,
+                                          int left, int right, int top, int bottom){
   int ylimit;
   int x, y;
   int x_diff;
+  int inner_x, inner_x_end, inner_x_diff;
+  int inner_y, inner_y_end;
 
   if(shadow_offset_x < 0){
     x = -shadow_offset_x;
@@ -507,20 +512,42 @@ static void make_transparent_shadowcenter(int width, int height, int swidth, int
     ylimit = height - shadow_offset_y;
   }
 
-  if(likely(x_diff > 0)){
-    assert(y >=0);
-    assert(ylimit <= sheight);
-    assert(x >=0 && x < swidth);
-    assert(x+x_diff <= swidth);
-    for(; y < ylimit ; y++){
-      memset(&data[y * swidth + x], 0, x_diff);
-    }
+  /* Shrink the transparent area by the frame extents so the shadow stays
+   * visible under the decorative frame.  Always keep at least CORNER_MARGIN
+   * pixels of shadow at each edge to cover typical rounded-corner radii
+   * (3-5 px) even when the window has no WM frame (_NET_FRAME_EXTENTS == 0). */
+  const int CORNER_MARGIN = 4;
+  int margin_left   = left   > CORNER_MARGIN ? left   : CORNER_MARGIN;
+  int margin_right  = right  > CORNER_MARGIN ? right  : CORNER_MARGIN;
+  int margin_top    = top    > CORNER_MARGIN ? top    : CORNER_MARGIN;
+  int margin_bottom = bottom > CORNER_MARGIN ? bottom : CORNER_MARGIN;
+
+  inner_x     = x + margin_left;
+  inner_x_end = x + x_diff - margin_right;
+  if (inner_x < 0) inner_x = 0;
+  if (inner_x_end > swidth) inner_x_end = swidth;
+  inner_x_diff = inner_x_end - inner_x;
+  if (inner_x_diff <= 0) return;
+
+  inner_y     = y + margin_top;
+  inner_y_end = ylimit - margin_bottom;
+  if (inner_y < 0) inner_y = 0;
+  if (inner_y_end > sheight) inner_y_end = sheight;
+  if (inner_y >= inner_y_end) return;
+
+  assert(inner_y >= 0);
+  assert(inner_y_end <= sheight);
+  assert(inner_x >= 0 && inner_x < swidth);
+  assert(inner_x + inner_x_diff <= swidth);
+  for (y = inner_y; y < inner_y_end; y++){
+    memset(&data[y * swidth + inner_x], 0, inner_x_diff);
   }
 }
 
 static XImage *
 make_shadow(Display *dpy, double opacity,
-            int width, int height, shadowtype shadow_type) {
+            int width, int height, shadowtype shadow_type,
+            int left, int right, int top, int bottom) {
   XImage *ximage;
   unsigned char *data;
   int gsize = gaussian_map->size;
@@ -628,20 +655,23 @@ make_shadow(Display *dpy, double opacity,
   case SHADOW_NO: assert(false);
   case SHADOW_FULL: break;
   case SHADOW_NOCENTER:
-    make_transparent_shadowcenter(width, height, swidth, sheight, data);
+    make_transparent_shadowcenter(width, height, swidth, sheight, data,
+                                  left, right, top, bottom);
   }
   return ximage;
 }
 
 static Picture
 shadow_picture(Display *dpy, double opacity, shadowtype shadow_type,
-               int width, int height, int *wp, int *hp) {
+               int width, int height, int *wp, int *hp,
+               int left, int right, int top, int bottom) {
   XImage *shadowImage;
   Pixmap shadowPixmap;
   Picture shadow_picture;
   GC gc;
 
-  shadowImage = make_shadow(dpy, opacity, width, height, shadow_type);
+  shadowImage = make_shadow(dpy, opacity, width, height, shadow_type,
+                            left, right, top, bottom);
   if (!shadowImage) return None;
 
   shadowPixmap = XCreatePixmap(dpy, root,
@@ -804,7 +834,9 @@ win_extents(Display *dpy, win *w) {
         dpy, opacity, w->shadow_type,
         w->a.width + w->a.border_width * 2,
         w->a.height + w->a.border_width * 2,
-        &w->shadow_width, &w->shadow_height);
+        &w->shadow_width, &w->shadow_height,
+        w->left_width, w->right_width,
+        w->top_width, w->bottom_width);
     }
 
     sr.x = w->a.x + w->shadow_dx;
